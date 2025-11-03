@@ -1,0 +1,39 @@
+{% extends 'layout.html' %}
+
+{% block title %}404 - Página no encontrada | Distrito 5{% endblock %}
+
+{% block body %}
+<div class="error-page">
+    <div class="background">
+        <div class="stripe"></div>
+        <div class="stripe"></div>
+        <div class="stripe"></div>
+        <div class="stripe"></div>
+        <div class="stripe"></div>
+        <div class="stripe"></div>
+        <div class="dark-stripe"></div>
+        <div class="dark-stripe"></div>
+    </div>
+
+    <div class="container-404">
+        <div class="error-card">
+            <div class="logo">
+                <h1>DISTRITO<span>5</span></h1>
+                <p>Urbana y Deportiva</p>
+            </div>
+
+            <div class="error-number">404</div>
+
+            <div class="divider"></div>
+
+            <h2 class="error-title">Página no encontrada</h2>
+            <p class="error-message">
+                Lo sentimos, la página que buscas no existe o ha sido movida. 
+                Regresa al inicio y continúa explorando.
+            </p>
+
+            <a href="{{ url_for('login') }}" class="btn-404">Volver al inicio</a>
+        </div>
+    </div>
+</div>
+{% endblock %}

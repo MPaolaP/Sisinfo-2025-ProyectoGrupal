@@ -1,0 +1,215 @@
+/* ======= Reset básico ======= */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+/* ======= Fondo general ======= */
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 50%, #0a0a0a 100%);
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    position: relative;
+    overflow: hidden;
+    background-image: url("../images/fondo.jpg");
+    background-size: cover;          
+    background-position: center;    
+    background-repeat: no-repeat;    
+    height: 100vh;                     
+    margin: 0;                         
+}
+body::before {
+    content: '';
+    position: absolute;
+    width: 500px;
+    height: 500px;
+    background: radial-gradient(circle, rgba(118, 255, 3, 0.15) 0%, transparent 70%);
+    top: -250px;
+    right: -250px;
+    animation: pulse 4s ease-in-out infinite;
+}
+@keyframes pulse {
+    0%, 100% { transform: scale(1); opacity: 0.5; }
+    50% { transform: scale(1.2); opacity: 0.8; }
+}
+/* ======= Animación de entrada ======= */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+body::after {
+    content: '';
+    position: absolute;
+    width: 400px;
+    height: 400px;
+    background: radial-gradient(circle, rgba(118, 255, 3, 0.1) 0%, transparent 70%);
+    bottom: -200px;
+    left: -200px;
+    animation: pulse 4s ease-in-out infinite 2s;
+}
+
+/* ======= Contenedor principal ======= */
+#container_login {
+    background: rgba(20, 20, 20, 0.95);
+    backdrop-filter: blur(10px);
+    border-radius: 20px;
+    padding: 50px 40px; 
+    width: 90%; 
+    max-width: 420px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5),
+                0 0 40px rgba(118, 255, 3, 0.1);
+    border: 1px solid rgba(118, 255, 3, 0.2);
+    position: relative;
+    z-index: 10;
+    animation: slideIn 0.6s ease-out;
+}
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        transform: translateY(30px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+
+/* ======= Títulos ======= */
+#Distrito {
+    font-size: 48px;
+    font-weight: 900;
+    color: #e0e0e0;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 5px;
+    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+    padding-left: 2rem; 
+}
+
+#cinco {
+    color: #76FF03;
+    font-size: 56px;
+    font-weight: 900;
+    display: inline-block;
+    text-shadow: 0 0 20px rgba(118, 255, 3, 0.5);
+}
+
+h2{
+    color: #76FF03;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    text-align: center;
+    margin-bottom: 2rem;
+}
+
+/* ======= Inputs ======= */
+input {
+    width: 100%;
+    padding: 15px 20px;
+    background: rgba(30, 30, 30, 0.8);
+    border: 2px solid rgba(118, 255, 3, 0.2);
+    border-radius: 10px;
+    color: #fff;
+    font-size: 16px;
+    transition: all 0.3s ease;
+    outline: none;
+}
+
+
+input::placeholder {
+    color: #666;
+}
+
+#user_password{
+    display: block;
+    color: #b0b0b0;
+    font-size: 14px;
+    margin-bottom: 8px;
+    font-weight: 500;
+    letter-spacing: 1px;
+    margin-top: 1rem;
+}
+
+/* ======= Botón de login ======= */
+#login_button {
+    width: 100%;
+    padding: 16px;
+    background: linear-gradient(135deg, #69b829 0%, #488912 100%);
+    border: none;
+    border-radius: 10px;
+    color: #000;
+    font-size: 16px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 5px 20px rgba(118, 255, 3, 0.4);
+    margin-top: 2rem;
+}
+#login_button:hover {
+    background: linear-gradient(135deg, #64DD00 0%, #76FF03 100%);
+    box-shadow: 0 8px 25px rgba(118, 255, 3, 0.6);
+}
+
+/* ======= Efecto de líneas decorativas ======= */
+.decorative-line {
+    position: absolute;
+    width: 100%;
+    height: 2px;
+    background: linear-gradient(90deg, transparent 0%, #76FF03 50%, transparent 100%);
+    top: 0;
+    left: 0;
+    opacity: 0.3;
+}
+
+
+/* ======= Adaptación Responsiva ======= */
+@media (max-width: 480px) {
+    
+    #container_login {
+        padding: 40px 20px; 
+        width: 95%; 
+    }
+
+    #Distrito {
+        font-size: 36px;
+        padding-left: 0; 
+        text-align: center;
+        letter-spacing: 1px;
+    }
+
+    #cinco {
+        font-size: 48px;
+    }
+    
+    h2 {
+        margin-bottom: 1.5rem; 
+    }
+
+    input {
+        padding: 12px 15px; 
+    }
+
+    #login_button {
+        padding: 14px; 
+        margin-top: 1.5rem;
+    }
+    
+    .divider {
+        margin: 20px 0;
+    }
+
+    .divider::before,
+    .divider::after {
+        width: 30%;
+    }
+}

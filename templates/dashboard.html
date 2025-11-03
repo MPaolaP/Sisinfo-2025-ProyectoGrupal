@@ -1,0 +1,37 @@
+{% extends 'layout_usuarios.html' %}
+
+{% block title %} Dashboard | Distrito 5{% endblock %}
+
+{% block content %}
+
+<div class="dashboard_container" id="dashboard_container">
+    <h2>Dashboard <span class="highlight">Principal</span></h2>
+</div>
+{% if current_user.user_type == 1 %}
+<div class="date-info" id="date_dashboard" style="position: right">
+    <form method="POST" action="/process_date_range">
+        <span class="date">Seleccionar Rango de Fechas</span>
+        <label for="first">Desde (Fecha de Inicio):</label>
+        <input type="date" id="fecha_inicio" name="fecha_inicio" required>
+        <br><br>
+        <label for="fecha_fin">Hasta (Fecha de Fin):</label>
+        <input type="date" id="fecha_fin" name="fecha_fin" required>
+    </form>
+</div>
+<div class="store_summary" id="store_summary">
+    <!-- Aquí van los resúmenes de las tiendas para el administrador -->
+</div>
+
+<div class="top_products" id="top_products">
+    <!-- Aquí van los productos más vendidos -->
+</div>
+
+<div class="notifications_products" id="notifications_products">
+    <!-- Aquí van las notificaciones de productos bajos en inventario -->
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+{% endblock %}
