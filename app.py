@@ -1,10 +1,11 @@
-from flask import Flask, render_template, redirect, url_for, request, jsonify
+from flask import Flask, render_template, redirect, url_for, request, jsonify, abort
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from Modelo.conexion import DevelopmentConfig
 from datetime import datetime, timedelta, date
-from sqlalchemy import func
+from sqlalchemy import func, or_
+from decimal import Decimal
 
 db = SQLAlchemy()
 login_manager = LoginManager()
@@ -43,6 +44,8 @@ class Product(db.Model):
     name = db.Column('product_name', db.String(200), nullable=False)
     sku = db.Column('sku', db.String(50), unique=True)
     price = db.Column('price', db.Numeric(10, 2))
+    size = db.Column('size', db.String(50))
+    color = db.Column('color', db.String(50))
     category_id = db.Column('category_id', db.Integer, db.ForeignKey('categories.category_id'))
 
 class Inventory(db.Model):
@@ -56,6 +59,100 @@ class Inventory(db.Model):
     product = db.relationship('Product', backref='inventory_items')
     store = db.relationship('Store', backref='inventory_items')
 
+
+class InventoryMovement(db.Model):
+    __tablename__ = 'inventory_movements'
+    id = db.Column('movement_id', db.Integer, primary_key=True)
+    product_id = db.Column('product_id', db.Integer, db.ForeignKey('products.product_id'), nullable=False)
+    store_id = db.Column('store_id', db.Integer, db.ForeignKey('stores.store_id'), nullable=False)
+    quantity = db.Column('quantity', db.Integer, nullable=False)
+    movement_type = db.Column('movement_type', db.String(20), nullable=False)  # entry, exit, transfer_in, transfer_out
+    notes = db.Column('notes', db.String(255))
+    performed_by = db.Column('performed_by', db.Integer, db.ForeignKey('user_account.user_id'))
+    created_at = db.Column('created_at', db.DateTime, default=datetime.utcnow)
+
+    product = db.relationship('Product')
+    store = db.relationship('Store')
+    user = db.relationship('User')
+
+
+class TransferRequest(db.Model):
+    __tablename__ = 'transfer_requests'
+    id = db.Column('transfer_id', db.Integer, primary_key=True)
+    product_id = db.Column('product_id', db.Integer, db.ForeignKey('products.product_id'), nullable=False)
+    source_store_id = db.Column('source_store_id', db.Integer, db.ForeignKey('stores.store_id'), nullable=False)
+    target_store_id = db.Column('target_store_id', db.Integer, db.ForeignKey('stores.store_id'), nullable=False)
+    quantity = db.Column('quantity', db.Integer, nullable=False)
+    status = db.Column('status', db.String(20), default='pending')
+    requested_by = db.Column('requested_by', db.Integer, db.ForeignKey('user_account.user_id'))
+    approved_by = db.Column('approved_by', db.Integer, db.ForeignKey('user_account.user_id'))
+    confirmed_by = db.Column('confirmed_by', db.Integer, db.ForeignKey('user_account.user_id'))
+    requested_at = db.Column('requested_at', db.DateTime, default=datetime.utcnow)
+    approved_at = db.Column('approved_at', db.DateTime)
+    confirmed_at = db.Column('confirmed_at', db.DateTime)
+    notes = db.Column('notes', db.String(255))
+
+    product = db.relationship('Product', foreign_keys=[product_id])
+    source_store = db.relationship('Store', foreign_keys=[source_store_id])
+    target_store = db.relationship('Store', foreign_keys=[target_store_id])
+    requester = db.relationship('User', foreign_keys=[requested_by])
+    approver = db.relationship('User', foreign_keys=[approved_by])
+    confirmer = db.relationship('User', foreign_keys=[confirmed_by])
+
+class Customer(db.Model):
+    __tablename__ = 'customers'
+    id = db.Column('customer_id', db.Integer, primary_key=True)
+    name = db.Column('customer_name', db.String(150), nullable=False)
+    email = db.Column('email', db.String(120))
+    phone = db.Column('phone', db.String(50))
+    created_at = db.Column('created_at', db.DateTime, default=datetime.utcnow)
+
+    invoices = db.relationship('Invoice', backref='customer', lazy=True)
+
+class POSSession(db.Model):
+    __tablename__ = 'pos_sessions'
+    id = db.Column('session_id', db.Integer, primary_key=True)
+    user_id = db.Column('user_id', db.Integer, db.ForeignKey('user_account.user_id'), nullable=False)
+    store_id = db.Column('store_id', db.Integer, db.ForeignKey('stores.store_id'), nullable=False)
+    opened_at = db.Column('opened_at', db.DateTime, default=datetime.utcnow)
+    closed_at = db.Column('closed_at', db.DateTime)
+    opening_amount = db.Column('opening_amount', db.Numeric(10, 2), default=0)
+    closing_amount = db.Column('closing_amount', db.Numeric(10, 2))
+    status = db.Column('status', db.String(20), default='open')
+    notes = db.Column('notes', db.String(255))
+
+    store = db.relationship('Store', backref='pos_sessions')
+    user = db.relationship('User', backref='pos_sessions')
+
+class Invoice(db.Model):
+    __tablename__ = 'invoices'
+    id = db.Column('invoice_id', db.Integer, primary_key=True)
+    invoice_number = db.Column('invoice_number', db.String(50), unique=True)
+    customer_id = db.Column('customer_id', db.Integer, db.ForeignKey('customers.customer_id'))
+    user_id = db.Column('user_id', db.Integer, db.ForeignKey('user_account.user_id'))
+    store_id = db.Column('store_id', db.Integer, db.ForeignKey('stores.store_id'))
+    session_id = db.Column('session_id', db.Integer, db.ForeignKey('pos_sessions.session_id'))
+    total_amount = db.Column('total_amount', db.Numeric(10, 2), default=0)
+    payment_method = db.Column('payment_method', db.String(50))
+    status = db.Column('status', db.String(20), default='paid')
+    created_at = db.Column('created_at', db.DateTime, default=datetime.utcnow)
+
+    user = db.relationship('User', backref='invoices')
+    store = db.relationship('Store', backref='invoices')
+    session = db.relationship('POSSession', backref='invoices')
+
+class InvoiceItem(db.Model):
+    __tablename__ = 'invoice_items'
+    id = db.Column('invoice_item_id', db.Integer, primary_key=True)
+    invoice_id = db.Column('invoice_id', db.Integer, db.ForeignKey('invoices.invoice_id'), nullable=False)
+    product_id = db.Column('product_id', db.Integer, db.ForeignKey('products.product_id'), nullable=False)
+    quantity = db.Column('quantity', db.Integer, nullable=False)
+    unit_price = db.Column('unit_price', db.Numeric(10, 2), nullable=False)
+    line_total = db.Column('line_total', db.Numeric(10, 2), nullable=False)
+
+    invoice = db.relationship('Invoice', backref='items')
+    product = db.relationship('Product', backref='invoice_items')
+
 class Sale(db.Model):
     __tablename__ = 'sales'
     id = db.Column('sale_id', db.Integer, primary_key=True)
@@ -64,9 +161,11 @@ class Sale(db.Model):
     quantity = db.Column('quantity', db.Integer, nullable=False)
     total_amount = db.Column('total_amount', db.Numeric(10, 2))
     sale_date = db.Column('sale_date', db.DateTime, default=datetime.utcnow)
+    session_id = db.Column('session_id', db.Integer, db.ForeignKey('pos_sessions.session_id'))
 
     store = db.relationship('Store', backref='sales')
     product = db.relationship('Product', backref='sales')
+    session = db.relationship('POSSession', backref='sales')
 
 class StockAlert(db.Model):
     __tablename__ = 'stock_alerts'
@@ -78,6 +177,69 @@ class StockAlert(db.Model):
     created_at = db.Column('created_at', db.DateTime, default=datetime.utcnow)
 
     inventory = db.relationship('Inventory', backref='alerts')
+
+
+# ======= HELPERS INVENTARIO =======
+def get_or_create_inventory(product_id, store_id):
+    inventory = Inventory.query.filter_by(product_id=product_id, store_id=store_id).first()
+    if not inventory:
+        inventory = Inventory(product_id=product_id, store_id=store_id, quantity=0)
+        db.session.add(inventory)
+        db.session.flush()
+    return inventory
+
+
+def update_stock_alerts(inventory):
+    active_alert = StockAlert.query.filter_by(inventory_id=inventory.id, is_active=True).first()
+    min_stock = inventory.min_stock or 0
+    if inventory.quantity <= min_stock:
+        message = f"Stock bajo para {inventory.product.name} en {inventory.store.name}"
+        if active_alert:
+            active_alert.message = message
+            active_alert.alert_type = 'LOW_STOCK'
+        else:
+            alert = StockAlert(
+                inventory_id=inventory.id,
+                alert_type='LOW_STOCK',
+                message=message,
+                is_active=True
+            )
+            db.session.add(alert)
+    elif active_alert:
+        active_alert.is_active = False
+
+
+def record_inventory_movement(product_id, store_id, quantity, movement_type, user_id=None, notes=None):
+    movement = InventoryMovement(
+        product_id=product_id,
+        store_id=store_id,
+        quantity=quantity,
+        movement_type=movement_type,
+        performed_by=user_id,
+        notes=notes
+    )
+    db.session.add(movement)
+    return movement
+
+
+def adjust_inventory(product_id, store_id, quantity_delta, movement_type, user_id=None, notes=None):
+    inventory = get_or_create_inventory(product_id, store_id)
+    new_quantity = (inventory.quantity or 0) + quantity_delta
+    if new_quantity < 0:
+        raise ValueError('El stock no puede ser negativo')
+
+    inventory.quantity = new_quantity
+    record_inventory_movement(
+        product_id=product_id,
+        store_id=store_id,
+        quantity=quantity_delta,
+        movement_type=movement_type,
+        user_id=user_id,
+        notes=notes
+    )
+    update_stock_alerts(inventory)
+    return inventory
+
 
 # ======= FECHAS =======
 def get_date_range_filter(fecha_inicio_str, fecha_fin_str):
@@ -114,6 +276,10 @@ def create_app(config_class=DevelopmentConfig):
     login_manager.login_view = 'login'
 
     app.register_error_handler(404, page_not_found)
+
+    def ensure_management_access():
+        if current_user.user_type not in [1, 2]:
+            abort(403)
 
     # ======= RUTAS =======
     @app.route('/')
@@ -164,13 +330,18 @@ def create_app(config_class=DevelopmentConfig):
     @app.route('/inventory')
     @login_required
     def inventory():
+        ensure_management_access()
         return render_template('inventory.html', username=current_user.username)
 
     @app.route('/sales')
     @login_required
     def sales():
-        return render_template('dashboard.html', username=current_user.username)
-
+        ensure_management_access()
+        stores = Store.query.filter_by(active=True).order_by(Store.name).all()
+        return render_template('sales.html',
+                               username=current_user.username,
+                               user_type=current_user.user_type,
+                               stores=stores)
     @app.route('/reports')
     @login_required
     def reports():
@@ -199,7 +370,368 @@ def create_app(config_class=DevelopmentConfig):
                                username=current_user.username,
                                user_type=current_user.user_type)
 
-    # ======= API =======
+    # ======= API INVENTARIO =======
+    @app.route('/api/inventory/overview', methods=['GET'])
+    @login_required
+    def inventory_overview():
+        inventory_rows = db.session.query(
+            Inventory.id.label('inventory_id'),
+            Inventory.quantity,
+            Inventory.min_stock,
+            Product.id.label('product_id'),
+            Product.name.label('product_name'),
+            Product.sku,
+            Product.size,
+            Product.color,
+            Category.name.label('category_name'),
+            Store.id.label('store_id'),
+            Store.name.label('store_name'),
+            Store.location
+        ).join(Product, Inventory.product_id == Product.id) \
+         .join(Store, Inventory.store_id == Store.id) \
+         .outerjoin(Category, Product.category_id == Category.id) \
+         .order_by(Store.name, Product.name)
+
+        items = []
+        total_units = 0
+        low_stock_count = 0
+        sizes = set()
+        colors = set()
+        categories = set()
+
+        for row in inventory_rows:
+            total_units += int(row.quantity or 0)
+            min_stock = row.min_stock or 0
+            is_low = (row.quantity or 0) <= min_stock
+            if is_low:
+                low_stock_count += 1
+
+            if row.size:
+                sizes.add(row.size)
+            if row.color:
+                colors.add(row.color)
+            if row.category_name:
+                categories.add(row.category_name)
+
+            items.append({
+                'inventory_id': row.inventory_id,
+                'product_id': row.product_id,
+                'product_name': row.product_name,
+                'sku': row.sku,
+                'size': row.size,
+                'color': row.color,
+                'category': row.category_name,
+                'store_id': row.store_id,
+                'store_name': row.store_name,
+                'location': row.location,
+                'quantity': int(row.quantity or 0),
+                'min_stock': int(row.min_stock or 0),
+                'low_stock': is_low
+            })
+
+        active_alerts = StockAlert.query.filter_by(is_active=True).count()
+        pending_transfers = TransferRequest.query.filter(
+            TransferRequest.status.in_(['pending', 'approved'])
+        ).count()
+
+        stores = Store.query.filter_by(active=True).order_by(Store.name).all()
+        products = Product.query.order_by(Product.name).all()
+
+        return jsonify({
+            'summary': {
+                'total_items': len(items),
+                'total_units': total_units,
+                'low_stock': low_stock_count,
+                'pending_transfers': pending_transfers,
+                'active_alerts': active_alerts
+            },
+            'classifiers': {
+                'sizes': sorted(sizes),
+                'colors': sorted(colors),
+                'categories': sorted(categories)
+            },
+            'items': items,
+            'stores': [
+                {'id': store.id, 'name': store.name, 'location': store.location}
+                for store in stores
+            ],
+            'products': [
+                {
+                    'id': product.id,
+                    'name': product.name,
+                    'sku': product.sku,
+                    'size': product.size,
+                    'color': product.color,
+                    'category': product.category.name if product.category else None
+                }
+                for product in products
+            ]
+        })
+
+    @app.route('/api/inventory/alerts', methods=['GET'])
+    @login_required
+    def inventory_alerts():
+        alerts = db.session.query(
+            StockAlert,
+            Inventory.quantity,
+            Inventory.min_stock,
+            Product.name.label('product_name'),
+            Product.sku,
+            Store.name.label('store_name')
+        ).join(Inventory, StockAlert.inventory_id == Inventory.id) \
+         .join(Product, Inventory.product_id == Product.id) \
+         .join(Store, Inventory.store_id == Store.id) \
+         .filter(StockAlert.is_active.is_(True)) \
+         .order_by(StockAlert.created_at.desc())
+
+        return jsonify([
+            {
+                'id': alert.StockAlert.id,
+                'product_name': alert.product_name,
+                'sku': alert.sku,
+                'store_name': alert.store_name,
+                'quantity': int(alert.quantity or 0),
+                'min_stock': int(alert.min_stock or 0),
+                'message': alert.StockAlert.message,
+                'alert_type': alert.StockAlert.alert_type,
+                'created_at': alert.StockAlert.created_at.strftime('%Y-%m-%d %H:%M')
+            }
+            for alert in alerts
+        ])
+
+    @app.route('/api/inventory/movements', methods=['GET', 'POST'])
+    @login_required
+    def inventory_movements():
+        if request.method == 'GET':
+            movements = db.session.query(
+                InventoryMovement,
+                Product.name.label('product_name'),
+                Store.name.label('store_name'),
+                User.username.label('user_name')
+            ).join(Product, InventoryMovement.product_id == Product.id) \
+             .join(Store, InventoryMovement.store_id == Store.id) \
+             .outerjoin(User, InventoryMovement.performed_by == User.id) \
+             .order_by(InventoryMovement.created_at.desc()) \
+             .limit(50)
+
+            return jsonify([
+                {
+                    'id': movement.InventoryMovement.id,
+                    'product_name': movement.product_name,
+                    'store_name': movement.store_name,
+                    'quantity': abs(int(movement.InventoryMovement.quantity)),
+                    'movement_type': movement.InventoryMovement.movement_type,
+                    'notes': movement.InventoryMovement.notes,
+                    'performed_by': movement.user_name,
+                    'created_at': movement.InventoryMovement.created_at.strftime('%Y-%m-%d %H:%M')
+                }
+                for movement in movements
+            ])
+
+        if current_user.user_type not in [1, 2]:
+            return jsonify({'error': 'No autorizado'}), 403
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+        store_id = data.get('store_id')
+        quantity = data.get('quantity')
+        movement_type = data.get('movement_type')
+        notes = data.get('notes')
+
+        if not all([product_id, store_id, quantity, movement_type]):
+            return jsonify({'error': 'Información incompleta para registrar el movimiento'}), 400
+
+        try:
+            quantity = int(quantity)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'La cantidad debe ser un número entero'}), 400
+
+        if quantity <= 0:
+            return jsonify({'error': 'La cantidad debe ser mayor a cero'}), 400
+
+        movement_type = movement_type.lower()
+        if movement_type not in ['entry', 'exit']:
+            return jsonify({'error': 'Tipo de movimiento no soportado'}), 400
+
+        quantity_delta = quantity if movement_type == 'entry' else -quantity
+
+        try:
+            inventory = adjust_inventory(
+                product_id=product_id,
+                store_id=store_id,
+                quantity_delta=quantity_delta,
+                movement_type='entry' if quantity_delta > 0 else 'exit',
+                user_id=current_user.id,
+                notes=notes
+            )
+            db.session.commit()
+        except ValueError as exc:
+            db.session.rollback()
+            return jsonify({'error': str(exc)}), 400
+
+        return jsonify({
+            'success': True,
+            'inventory': {
+                'inventory_id': inventory.id,
+                'quantity': int(inventory.quantity),
+                'min_stock': int(inventory.min_stock or 0)
+            }
+        })
+
+    @app.route('/api/inventory/transfers', methods=['GET', 'POST'])
+    @login_required
+    def inventory_transfers():
+        if request.method == 'GET':
+            target_store = aliased(Store)
+            approver_user = aliased(User)
+            confirmer_user = aliased(User)
+
+            transfers = db.session.query(
+                TransferRequest,
+                Product.name.label('product_name'),
+                Product.sku,
+                Store.name.label('source_store'),
+                Store.location.label('source_location'),
+                target_store.name.label('target_store'),
+                target_store.location.label('target_location'),
+                User.username.label('requester_name'),
+                approver_user.username.label('approver_name'),
+                confirmer_user.username.label('confirmer_name')
+            ).join(Product, TransferRequest.product_id == Product.id) \
+             .join(Store, TransferRequest.source_store_id == Store.id) \
+             .join(target_store, TransferRequest.target_store_id == target_store.id) \
+             .outerjoin(User, TransferRequest.requested_by == User.id) \
+             .outerjoin(approver_user, TransferRequest.approved_by == approver_user.id) \
+             .outerjoin(confirmer_user, TransferRequest.confirmed_by == confirmer_user.id) \
+             .order_by(TransferRequest.requested_at.desc())
+
+            status_labels = {
+                'pending': 'Pendiente de aprobación',
+                'approved': 'Aprobada / En tránsito',
+                'completed': 'Recibida',
+                'rejected': 'Rechazada'
+            }
+
+            return jsonify([
+                {
+                    'id': transfer.TransferRequest.id,
+                    'product_name': transfer.product_name,
+                    'sku': transfer.sku,
+                    'quantity': int(transfer.TransferRequest.quantity),
+                    'status': transfer.TransferRequest.status,
+                    'status_label': status_labels.get(transfer.TransferRequest.status, transfer.TransferRequest.status.title()),
+                    'source_store': transfer.source_store,
+                    'source_location': transfer.source_location,
+                    'target_store': transfer.target_store,
+                    'target_location': transfer.target_location,
+                    'requested_at': transfer.TransferRequest.requested_at.strftime('%Y-%m-%d %H:%M'),
+                    'approved_at': transfer.TransferRequest.approved_at.strftime('%Y-%m-%d %H:%M') if transfer.TransferRequest.approved_at else None,
+                    'confirmed_at': transfer.TransferRequest.confirmed_at.strftime('%Y-%m-%d %H:%M') if transfer.TransferRequest.confirmed_at else None,
+                    'requested_by': transfer.requester_name,
+                    'approved_by': transfer.approver_name,
+                    'confirmed_by': transfer.confirmer_name,
+                    'notes': transfer.TransferRequest.notes,
+                    'can_approve': current_user.user_type in [1, 2] and transfer.TransferRequest.status == 'pending',
+                    'can_confirm': current_user.user_type in [1, 2] and transfer.TransferRequest.status == 'approved'
+                }
+                for transfer in transfers
+            ])
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+        source_store_id = data.get('source_store_id')
+        target_store_id = data.get('target_store_id')
+        quantity = data.get('quantity')
+        notes = data.get('notes')
+
+        if not all([product_id, source_store_id, target_store_id, quantity]):
+            return jsonify({'error': 'Debe completar todos los campos obligatorios'}), 400
+
+        try:
+            product_id = int(product_id)
+            source_store_id = int(source_store_id)
+            target_store_id = int(target_store_id)
+            quantity = int(quantity)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'Los identificadores y la cantidad deben ser números enteros válidos'}), 400
+
+        if source_store_id == target_store_id:
+            return jsonify({'error': 'La sucursal de origen y destino deben ser diferentes'}), 400
+
+        if quantity <= 0:
+            return jsonify({'error': 'La cantidad debe ser mayor a cero'}), 400
+
+        transfer = TransferRequest(
+            product_id=product_id,
+            source_store_id=source_store_id,
+            target_store_id=target_store_id,
+            quantity=quantity,
+            notes=notes,
+            requested_by=current_user.id,
+            status='pending'
+        )
+        db.session.add(transfer)
+        db.session.commit()
+
+        return jsonify({'success': True, 'transfer_id': transfer.id, 'status': transfer.status})
+
+    @app.route('/api/inventory/transfers/<int:transfer_id>/approve', methods=['POST'])
+    @login_required
+    def approve_transfer(transfer_id):
+        if current_user.user_type not in [1, 2]:
+            return jsonify({'error': 'No autorizado'}), 403
+
+        transfer = TransferRequest.query.get_or_404(transfer_id)
+        if transfer.status != 'pending':
+            return jsonify({'error': 'Solo se pueden aprobar transferencias pendientes'}), 400
+
+        try:
+            adjust_inventory(
+                product_id=transfer.product_id,
+                store_id=transfer.source_store_id,
+                quantity_delta=-transfer.quantity,
+                movement_type='transfer_out',
+                user_id=current_user.id,
+                notes=f'Salida por transferencia #{transfer.id}'
+            )
+            transfer.status = 'approved'
+            transfer.approved_by = current_user.id
+            transfer.approved_at = datetime.utcnow()
+            db.session.commit()
+        except ValueError as exc:
+            db.session.rollback()
+            return jsonify({'error': str(exc)}), 400
+
+        return jsonify({'success': True, 'status': transfer.status})
+
+    @app.route('/api/inventory/transfers/<int:transfer_id>/confirm', methods=['POST'])
+    @login_required
+    def confirm_transfer(transfer_id):
+        if current_user.user_type not in [1, 2]:
+            return jsonify({'error': 'No autorizado'}), 403
+
+        transfer = TransferRequest.query.get_or_404(transfer_id)
+        if transfer.status != 'approved':
+            return jsonify({'error': 'Solo se pueden confirmar transferencias aprobadas'}), 400
+
+        try:
+            adjust_inventory(
+                product_id=transfer.product_id,
+                store_id=transfer.target_store_id,
+                quantity_delta=transfer.quantity,
+                movement_type='transfer_in',
+                user_id=current_user.id,
+                notes=f'Entrada por transferencia #{transfer.id}'
+            )
+            transfer.status = 'completed'
+            transfer.confirmed_by = current_user.id
+            transfer.confirmed_at = datetime.utcnow()
+            db.session.commit()
+        except ValueError as exc:
+            db.session.rollback()
+            return jsonify({'error': str(exc)}), 400
+
+        return jsonify({'success': True, 'status': transfer.status})
     @app.route('/api/dashboard/stats', methods=['GET'])
     @login_required
     def get_dashboard_stats():
@@ -347,6 +879,281 @@ def create_app(config_class=DevelopmentConfig):
             'total_sales': float(total_sales),
             'inventory': [{'name': n, 'quantity': q} for (n, q) in inventory_items]
         })
+    def serialize_customer(customer):
+        return {
+            'id': customer.id,
+            'name': customer.name,
+            'email': customer.email,
+            'phone': customer.phone,
+            'created_at': customer.created_at.strftime('%Y-%m-%d %H:%M') if customer.created_at else None
+        }
+
+    def serialize_invoice(invoice):
+        return {
+            'id': invoice.id,
+            'invoice_number': invoice.invoice_number,
+            'customer': invoice.customer.name if invoice.customer else 'Consumidor final',
+            'total_amount': float(invoice.total_amount or 0),
+            'payment_method': invoice.payment_method,
+            'created_at': invoice.created_at.strftime('%Y-%m-%d %H:%M') if invoice.created_at else None,
+            'items': [
+                {
+                    'product': item.product.name if item.product else 'Producto',
+                    'quantity': item.quantity,
+                    'unit_price': float(item.unit_price or 0),
+                    'line_total': float(item.line_total or 0)
+                } for item in invoice.items
+            ]
+        }
+
+    @app.route('/api/customers', methods=['GET', 'POST'])
+    @login_required
+    def manage_customers_api():
+        ensure_management_access()
+        if request.method == 'GET':
+            customers = Customer.query.order_by(Customer.created_at.desc()).all()
+            return jsonify([serialize_customer(customer) for customer in customers])
+
+        data = request.get_json(force=True)
+        name = (data.get('name') or '').strip()
+        if not name:
+            return jsonify({'error': 'El nombre del cliente es obligatorio.'}), 400
+
+        customer = Customer(
+            name=name,
+            email=(data.get('email') or '').strip() or None,
+            phone=(data.get('phone') or '').strip() or None
+        )
+        db.session.add(customer)
+        db.session.commit()
+        return jsonify({'message': 'Cliente registrado correctamente.', 'customer': serialize_customer(customer)}), 201
+
+    @app.route('/api/customers/<int:customer_id>', methods=['PUT'])
+    @login_required
+    def update_customer(customer_id):
+        ensure_management_access()
+        customer = Customer.query.get_or_404(customer_id)
+        data = request.get_json(force=True)
+        name = (data.get('name') or '').strip()
+        if not name:
+            return jsonify({'error': 'El nombre del cliente es obligatorio.'}), 400
+
+        customer.name = name
+        customer.email = (data.get('email') or '').strip() or None
+        customer.phone = (data.get('phone') or '').strip() or None
+        db.session.commit()
+        return jsonify({'message': 'Cliente actualizado correctamente.', 'customer': serialize_customer(customer)})
+
+    @app.route('/api/customers/<int:customer_id>/history', methods=['GET'])
+    @login_required
+    def get_customer_history(customer_id):
+        ensure_management_access()
+        customer = Customer.query.get_or_404(customer_id)
+        invoices = Invoice.query.filter_by(customer_id=customer.id).order_by(Invoice.created_at.desc()).limit(25).all()
+        return jsonify({
+            'customer': serialize_customer(customer),
+            'history': [serialize_invoice(invoice) for invoice in invoices]
+        })
+
+    @app.route('/api/pos/products', methods=['GET'])
+    @login_required
+    def search_products_for_pos():
+        ensure_management_access()
+        query = (request.args.get('query') or '').strip()
+        if not query:
+            return jsonify({'results': []})
+
+        like_query = f"%{query}%"
+        products = Product.query.filter(
+            or_(
+                Product.name.ilike(like_query),
+                Product.sku.ilike(like_query)
+            )
+        ).limit(15).all()
+
+        results = []
+        for product in products:
+            inventory_item = None
+            if current_user.user_type in [1, 2]:
+                inventory_item = Inventory.query.filter_by(product_id=product.id).first()
+            results.append({
+                'id': product.id,
+                'name': product.name,
+                'sku': product.sku,
+                'price': float(product.price or 0),
+                'stock': inventory_item.quantity if inventory_item else None
+            })
+
+        return jsonify({'results': results})
+
+    @app.route('/api/pos/session/current', methods=['GET'])
+    @login_required
+    def get_current_session():
+        ensure_management_access()
+        current_session = POSSession.query.filter_by(user_id=current_user.id, status='open').order_by(POSSession.opened_at.desc()).first()
+        if not current_session:
+            return jsonify({'session': None})
+
+        total_sales = db.session.query(func.sum(Sale.total_amount)).filter(Sale.session_id == current_session.id).scalar() or Decimal('0')
+        return jsonify({
+            'session': {
+                'id': current_session.id,
+                'store_id': current_session.store_id,
+                'store': current_session.store.name if current_session.store else None,
+                'opened_at': current_session.opened_at.strftime('%Y-%m-%d %H:%M'),
+                'opening_amount': float(current_session.opening_amount or 0),
+                'total_sales': float(total_sales)
+            }
+        })
+
+    @app.route('/api/pos/session/open', methods=['POST'])
+    @login_required
+    def open_pos_session():
+        ensure_management_access()
+        data = request.get_json(force=True)
+        store_id = data.get('store_id')
+        opening_amount = Decimal(str(data.get('opening_amount', '0') or '0'))
+        notes = (data.get('notes') or '').strip() or None
+
+        if not store_id:
+            return jsonify({'error': 'Debe seleccionar una tienda para abrir la caja.'}), 400
+
+        existing = POSSession.query.filter_by(user_id=current_user.id, status='open').first()
+        if existing:
+            return jsonify({'error': 'Ya tienes una caja abierta. Debes cerrarla antes de abrir una nueva.'}), 400
+
+        pos_session = POSSession(
+            user_id=current_user.id,
+            store_id=store_id,
+            opening_amount=opening_amount,
+            notes=notes
+        )
+        db.session.add(pos_session)
+        db.session.commit()
+        return jsonify({'message': 'Caja abierta correctamente.', 'session': {
+            'id': pos_session.id,
+            'store_id': pos_session.store_id,
+            'store': pos_session.store.name if pos_session.store else None,
+            'opened_at': pos_session.opened_at.strftime('%Y-%m-%d %H:%M'),
+            'opening_amount': float(pos_session.opening_amount or 0)
+        }}), 201
+
+    @app.route('/api/pos/session/<int:session_id>/close', methods=['POST'])
+    @login_required
+    def close_pos_session(session_id):
+        ensure_management_access()
+        pos_session = POSSession.query.get_or_404(session_id)
+        if pos_session.user_id != current_user.id:
+            return jsonify({'error': 'Solo el usuario que abrió la caja puede cerrarla.'}), 403
+        if pos_session.status != 'open':
+            return jsonify({'error': 'La caja ya se encuentra cerrada.'}), 400
+
+        data = request.get_json(force=True)
+        closing_amount = Decimal(str(data.get('closing_amount', '0') or '0'))
+
+        total_sales = db.session.query(func.sum(Sale.total_amount)).filter(Sale.session_id == pos_session.id).scalar() or Decimal('0')
+
+        pos_session.status = 'closed'
+        pos_session.closed_at = datetime.utcnow()
+        pos_session.closing_amount = closing_amount
+        db.session.commit()
+
+        return jsonify({
+            'message': 'Caja cerrada correctamente.',
+            'session': {
+                'id': pos_session.id,
+                'closed_at': pos_session.closed_at.strftime('%Y-%m-%d %H:%M'),
+                'closing_amount': float(pos_session.closing_amount or 0),
+                'total_sales': float(total_sales)
+            }
+        })
+
+    @app.route('/api/pos/checkout', methods=['POST'])
+    @login_required
+    def pos_checkout():
+        ensure_management_access()
+        data = request.get_json(force=True)
+        items = data.get('items') or []
+        customer_id = data.get('customer_id')
+        payment_method = (data.get('payment_method') or 'Efectivo').strip()
+
+        if not items:
+            return jsonify({'error': 'Debes agregar productos antes de facturar.'}), 400
+
+        current_session = POSSession.query.filter_by(user_id=current_user.id, status='open').first()
+        if not current_session:
+            return jsonify({'error': 'No hay una caja abierta. Abre una sesión de caja antes de registrar ventas.'}), 400
+
+        # Validar inventario
+        inventory_map = {}
+        for item in items:
+            product_id = item.get('product_id')
+            quantity = int(item.get('quantity', 0))
+            if quantity <= 0:
+                return jsonify({'error': 'La cantidad debe ser mayor que cero.'}), 400
+            inventory_item = Inventory.query.filter_by(product_id=product_id, store_id=current_session.store_id).with_for_update().first()
+            if not inventory_item or inventory_item.quantity < quantity:
+                return jsonify({'error': f'Stock insuficiente para el producto {product_id}.'}), 400
+            inventory_map[product_id] = inventory_item
+
+        invoice = Invoice(
+            customer_id=customer_id,
+            user_id=current_user.id,
+            store_id=current_session.store_id,
+            session_id=current_session.id,
+            payment_method=payment_method
+        )
+        db.session.add(invoice)
+        db.session.flush()
+
+        total_amount = Decimal('0')
+        for item in items:
+            product = Product.query.get(item.get('product_id'))
+            if not product:
+                db.session.rollback()
+                return jsonify({'error': 'Producto no encontrado.'}), 404
+            quantity = int(item.get('quantity', 0))
+            unit_price = Decimal(str(item.get('unit_price'))) if item.get('unit_price') is not None else Decimal(str(product.price or 0))
+            line_total = unit_price * quantity
+            total_amount += line_total
+
+            invoice_item = InvoiceItem(
+                invoice_id=invoice.id,
+                product_id=product.id,
+                quantity=quantity,
+                unit_price=unit_price,
+                line_total=line_total
+            )
+            db.session.add(invoice_item)
+
+            inventory_map[product.id].quantity -= quantity
+
+            sale = Sale(
+                store_id=current_session.store_id,
+                product_id=product.id,
+                quantity=quantity,
+                total_amount=line_total,
+                sale_date=datetime.utcnow(),
+                session_id=current_session.id
+            )
+            db.session.add(sale)
+
+        invoice.total_amount = total_amount
+        invoice.invoice_number = f"INV-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{invoice.id}"
+
+        db.session.commit()
+
+        return jsonify({
+            'message': 'Venta registrada correctamente.',
+            'invoice': serialize_invoice(invoice)
+        }), 201
+
+    @app.route('/api/invoices/recent', methods=['GET'])
+    @login_required
+    def recent_invoices():
+        ensure_management_access()
+        invoices = Invoice.query.order_by(Invoice.created_at.desc()).limit(20).all()
+        return jsonify({'invoices': [serialize_invoice(invoice) for invoice in invoices]})
 
     return app
 

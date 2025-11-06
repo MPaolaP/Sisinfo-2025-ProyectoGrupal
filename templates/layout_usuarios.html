@@ -37,7 +37,6 @@
     {% elif current_user.user_type == 3 %}
         <nav class="admin-nav">
             <a id="selection-btn" href="{{ url_for('dashboard') }}">Dashboard</a>
-            <a id="selection-btn" href="{{ url_for('inventory') }}">Inventario</a>
         </nav>
     {% endif %}
     {% endblock %}

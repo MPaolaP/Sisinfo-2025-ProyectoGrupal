@@ -1,0 +1,238 @@
+{% extends 'layout_usuarios.html' %}
+{% block title %}Inventario | Distrito 5{% endblock %}
+
+{% block content %}
+<div class="inventory-container" id="inventory_module">
+    <div class="inventory-header">
+        <div>
+            <h2>Gestión de <span class="highlight">Inventario</span></h2>
+            <p class="inventory-subtitle">Control de existencias, clasificaciones y transferencias entre sucursales.</p>
+        </div>
+        <div id="inventory_feedback" class="inventory-feedback" role="alert" aria-live="polite"></div>
+    </div>
+
+    <div class="inventory-summary" id="inventory_summary">
+        <div class="summary-card" data-summary="units">
+            <div class="summary-icon">
+                <i class="fas fa-boxes"></i>
+            </div>
+            <div class="summary-info">
+                <span class="summary-label">Unidades totales</span>
+                <span class="summary-value">0</span>
+            </div>
+        </div>
+        <div class="summary-card" data-summary="items">
+            <div class="summary-icon">
+                <i class="fas fa-tags"></i>
+            </div>
+            <div class="summary-info">
+                <span class="summary-label">Referencias controladas</span>
+                <span class="summary-value">0</span>
+            </div>
+        </div>
+        <div class="summary-card" data-summary="low_stock">
+            <div class="summary-icon">
+                <i class="fas fa-exclamation-triangle"></i>
+            </div>
+            <div class="summary-info">
+                <span class="summary-label">Stock en alerta</span>
+                <span class="summary-value">0</span>
+            </div>
+        </div>
+        <div class="summary-card" data-summary="transfers">
+            <div class="summary-icon">
+                <i class="fas fa-exchange-alt"></i>
+            </div>
+            <div class="summary-info">
+                <span class="summary-label">Transferencias pendientes</span>
+                <span class="summary-value">0</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="inventory-panels">
+        <section class="inventory-panel inventory-filters" aria-labelledby="filters_title">
+            <div class="panel-header">
+                <h3 id="filters_title">Clasificación de productos</h3>
+                <p>Filtra el inventario por talla, color, categoría y sucursal.</p>
+            </div>
+            <div class="filter-grid">
+                <div class="filter-field">
+                    <label for="size_filter">Talla</label>
+                    <select id="size_filter">
+                        <option value="">Todas</option>
+                    </select>
+                </div>
+                <div class="filter-field">
+                    <label for="color_filter">Color</label>
+                    <select id="color_filter">
+                        <option value="">Todos</option>
+                    </select>
+                </div>
+                <div class="filter-field">
+                    <label for="category_filter">Categoría</label>
+                    <select id="category_filter">
+                        <option value="">Todas</option>
+                    </select>
+                </div>
+                <div class="filter-field">
+                    <label for="store_filter">Sucursal</label>
+                    <select id="store_filter">
+                        <option value="">Todas</option>
+                    </select>
+                </div>
+                <div class="filter-field search-field">
+                    <label for="inventory_search">Buscar</label>
+                    <input type="search" id="inventory_search" placeholder="Nombre, SKU o ubicación" autocomplete="off">
+                </div>
+            </div>
+        </section>
+
+        <section class="inventory-panel inventory-alerts" aria-labelledby="alerts_title">
+            <div class="panel-header">
+                <h3 id="alerts_title">Alertas de stock mínimo</h3>
+                <p>Monitoreo del stock mínimo configurado para cada producto.</p>
+            </div>
+            <div id="inventory_alerts_list" class="alerts-scrollable">
+                <div class="loading-spinner"><i class="fas fa-spinner fa-spin"></i> Cargando alertas...</div>
+            </div>
+        </section>
+    </div>
+
+    <section class="inventory-panel inventory-table" aria-labelledby="table_title">
+        <div class="panel-header">
+            <h3 id="table_title">Existencias por sucursal</h3>
+            <p>Detalle de entradas, salidas y stock actual por producto.</p>
+        </div>
+        <div class="table-wrapper">
+            <table id="inventory_table">
+                <thead>
+                    <tr>
+                        <th>Producto</th>
+                        <th>SKU</th>
+                        <th>Talla</th>
+                        <th>Color</th>
+                        <th>Categoría</th>
+                        <th>Sucursal</th>
+                        <th>Stock</th>
+                        <th>Mínimo</th>
+                        <th>Estado</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td colspan="9" class="table-empty">Cargando inventario...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    {% if current_user.user_type in [1, 2] %}
+    <section class="inventory-panel movement-management" aria-labelledby="movements_title">
+        <div class="panel-header">
+            <h3 id="movements_title">Entradas y salidas</h3>
+            <p>Registra movimientos manuales de inventario por sucursal.</p>
+        </div>
+        <div class="movement-grid">
+            <form id="movement_form" class="movement-form">
+                <div class="form-field">
+                    <label for="movement_product">Producto</label>
+                    <select id="movement_product" required>
+                        <option value="">Seleccione un producto</option>
+                    </select>
+                </div>
+                <div class="form-field">
+                    <label for="movement_store">Sucursal</label>
+                    <select id="movement_store" required>
+                        <option value="">Seleccione una sucursal</option>
+                    </select>
+                </div>
+                <div class="form-field">
+                    <label for="movement_type">Tipo de movimiento</label>
+                    <select id="movement_type" required>
+                        <option value="entry">Entrada</option>
+                        <option value="exit">Salida</option>
+                    </select>
+                </div>
+                <div class="form-field">
+                    <label for="movement_quantity">Cantidad</label>
+                    <input type="number" id="movement_quantity" min="1" required>
+                </div>
+                <div class="form-field full-width">
+                    <label for="movement_notes">Observaciones</label>
+                    <textarea id="movement_notes" rows="2" placeholder="Motivo del movimiento"></textarea>
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn-primary">Registrar movimiento</button>
+                </div>
+            </form>
+            <div class="movement-history" aria-live="polite">
+                <h4>Movimientos recientes</h4>
+                <div id="movements_list" class="movements-scrollable">
+                    <div class="loading-spinner"><i class="fas fa-spinner fa-spin"></i> Cargando movimientos...</div>
+                </div>
+            </div>
+        </div>
+    </section>
+    {% endif %}
+
+    <section class="inventory-panel transfer-management" aria-labelledby="transfers_title">
+        <div class="panel-header">
+            <h3 id="transfers_title">Transferencias entre sucursales</h3>
+            {% if current_user.user_type == 3 %}
+            <p>Solicita el envío de productos a otra sucursal para reponer stock.</p>
+            {% else %}
+            <p>Gestiona solicitudes, aprobaciones y confirmaciones de traslado.</p>
+            {% endif %}
+        </div>
+        <div class="transfer-grid">
+            <form id="transfer_form" class="transfer-form">
+                <h4>{% if current_user.user_type == 3 %}Nueva solicitud de transferencia{% else %}Registrar transferencia{% endif %}</h4>
+                <div class="form-field">
+                    <label for="transfer_product">Producto</label>
+                    <select id="transfer_product" required>
+                        <option value="">Seleccione un producto</option>
+                    </select>
+                </div>
+                <div class="form-field">
+                    <label for="transfer_source">Sucursal origen</label>
+                    <select id="transfer_source" required>
+                        <option value="">Seleccione origen</option>
+                    </select>
+                </div>
+                <div class="form-field">
+                    <label for="transfer_target">Sucursal destino</label>
+                    <select id="transfer_target" required>
+                        <option value="">Seleccione destino</option>
+                    </select>
+                </div>
+                <div class="form-field">
+                    <label for="transfer_quantity">Cantidad</label>
+                    <input type="number" id="transfer_quantity" min="1" required>
+                </div>
+                <div class="form-field full-width">
+                    <label for="transfer_notes">Observaciones</label>
+                    <textarea id="transfer_notes" rows="2" placeholder="Detalles de la solicitud"></textarea>
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn-primary">Enviar solicitud</button>
+                </div>
+            </form>
+            <div class="transfer-history" aria-live="polite">
+                <h4>Seguimiento de transferencias</h4>
+                <div id="transfers_list" class="transfers-scrollable">
+                    <div class="loading-spinner"><i class="fas fa-spinner fa-spin"></i> Cargando transferencias...</div>
+                </div>
+            </div>
+        </div>
+    </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    window.USER_TYPE = Number('{{ current_user.user_type | default(0) }}');
+</script>
+<script src="{{ url_for('static', filename='js/inventory_module.js') }}"></script>
+{% endblock %}

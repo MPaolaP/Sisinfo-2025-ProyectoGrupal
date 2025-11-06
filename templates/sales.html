@@ -1,0 +1,184 @@
+{% extends 'layout_usuarios.html' %}
+{% block title %}Ventas y Facturación | Distrito 5{% endblock %}
+
+{% block content %}
+<div class="module-wrapper">
+  <section class="module-card session-card">
+    <div class="card-header">
+      <div>
+        <h2>Control de Caja Diaria</h2>
+        <p>Gestiona la apertura y cierre de caja para registrar tus ventas diarias.</p>
+      </div>
+      <span class="status-tag" id="session_status_tag">Sin sesión</span>
+    </div>
+    <div class="session-status" id="session_status">No hay una caja abierta actualmente.</div>
+    <form id="pos_session_form" class="form-grid" autocomplete="off">
+      <div class="form-field">
+        <label for="session_store">Sucursal</label>
+        <select id="session_store" name="store_id">
+          <option value="">Selecciona una sucursal</option>
+          {% for store in stores %}
+          <option value="{{ store.id }}">{{ store.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-field">
+        <label for="opening_amount">Monto de apertura</label>
+        <input type="number" step="0.01" min="0" id="opening_amount" placeholder="0.00">
+      </div>
+      <div class="form-field form-field-notes">
+        <label for="session_notes">Notas</label>
+        <textarea id="session_notes" rows="2" placeholder="Observaciones de apertura o cierre"></textarea>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn primary" id="open_session_btn">Abrir caja</button>
+        <button type="button" class="btn danger" id="close_session_btn" disabled>Cerrar caja</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="module-card pos-card">
+    <div class="card-header">
+      <div>
+        <h2>Punto de Venta (POS)</h2>
+        <p>Escanea productos con código de barras o QR y genera la factura en segundos.</p>
+      </div>
+      <div class="pos-session-info" id="pos_session_info">Caja no iniciada</div>
+    </div>
+    <div class="pos-grid">
+      <div class="pos-search">
+        <div class="input-stack">
+          <label for="scanner_input">Escáner</label>
+          <input type="text" id="scanner_input" placeholder="Escanea un código de barras o QR" autocomplete="off">
+        </div>
+        <div class="input-stack">
+          <label for="product_search">Buscar producto</label>
+          <input type="text" id="product_search" placeholder="Nombre o SKU" autocomplete="off">
+        </div>
+        <div class="search-results" id="product_results">
+          <p class="placeholder">Busca o escanea para ver resultados.</p>
+        </div>
+      </div>
+      <div class="pos-cart">
+        <div class="cart-header">
+          <h3>Carrito de venta</h3>
+          <button type="button" class="btn ghost" id="clear_cart_btn">Vaciar</button>
+        </div>
+        <div class="cart-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th>Cant.</th>
+                <th>Precio</th>
+                <th>Total</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="cart_items">
+              <tr class="empty-row">
+                <td colspan="5">Agrega productos al carrito para iniciar la venta.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="cart-summary">
+          <div class="summary-row">
+            <span>Total artículos</span>
+            <strong id="cart_total_items">0</strong>
+          </div>
+          <div class="summary-row total">
+            <span>Total a pagar</span>
+            <strong id="cart_total_amount">$0.00</strong>
+          </div>
+        </div>
+        <div class="cart-actions">
+          <div class="form-field">
+            <label for="payment_method">Método de pago</label>
+            <select id="payment_method">
+              <option value="Efectivo">Efectivo</option>
+              <option value="Tarjeta">Tarjeta</option>
+              <option value="Transferencia">Transferencia</option>
+              <option value="Mixto">Mixto</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <label for="selected_customer">Cliente</label>
+            <select id="selected_customer">
+              <option value="">Consumidor final</option>
+            </select>
+          </div>
+          <button type="button" class="btn primary full" id="checkout_btn" disabled>Facturar</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="module-card customer-card">
+    <div class="card-header">
+      <div>
+        <h2>Gestión de clientes</h2>
+        <p>Administra la base de clientes y consulta el historial de compras.</p>
+      </div>
+    </div>
+    <div class="customer-grid">
+      <form id="customer_form" class="customer-form" autocomplete="off">
+        <h3>Registrar / actualizar cliente</h3>
+        <div class="form-field">
+          <label for="customer_name">Nombre completo</label>
+          <input type="text" id="customer_name" required>
+        </div>
+        <div class="form-field">
+          <label for="customer_email">Correo electrónico</label>
+          <input type="email" id="customer_email">
+        </div>
+        <div class="form-field">
+          <label for="customer_phone">Teléfono</label>
+          <input type="text" id="customer_phone">
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn primary">Guardar cliente</button>
+          <button type="button" class="btn ghost" id="reset_customer_form">Limpiar</button>
+        </div>
+        <input type="hidden" id="customer_id">
+      </form>
+      <div class="customer-list" id="customers_list">
+        <p class="placeholder">No hay clientes registrados.</p>
+      </div>
+      <div class="customer-history" id="customer_history">
+        <h3>Historial de compras</h3>
+        <p class="placeholder">Selecciona un cliente para ver sus facturas.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="module-card invoices-card">
+    <div class="card-header">
+      <div>
+        <h2>Facturación reciente</h2>
+        <p>Consulta las últimas facturas generadas en el punto de venta.</p>
+      </div>
+      <button type="button" class="btn ghost" id="refresh_invoices_btn">Actualizar</button>
+    </div>
+    <div class="invoice-list" id="invoice_list">
+      <p class="placeholder">Aún no se registran facturas.</p>
+    </div>
+  </section>
+</div>
+
+<div class="toast" id="pos_toast"></div>
+
+<script>
+  window.POS_ENDPOINTS = {
+    customers: "{{ url_for('manage_customers_api') }}",
+    customerDetail: "{{ url_for('get_customer_history', customer_id=0) }}".replace('0', '{customer_id}'),
+    products: "{{ url_for('search_products_for_pos') }}",
+    currentSession: "{{ url_for('get_current_session') }}",
+    openSession: "{{ url_for('open_pos_session') }}",
+    closeSession: "{{ url_for('close_pos_session', session_id=0) }}".replace('0', '{session_id}'),
+    checkout: "{{ url_for('pos_checkout') }}",
+    invoices: "{{ url_for('recent_invoices') }}"
+  };
+</script>
+<script src="{{ url_for('static', filename='js/sales.js') }}"></script>
+{% endblock %}
