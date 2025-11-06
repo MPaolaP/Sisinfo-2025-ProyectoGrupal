@@ -3,31 +3,44 @@
 
 {% block content %}
 <div class="dashboard_container" id="dashboard_container">
-  <h2>Dashboard <span class="highlight">Principal</span></h2>
-</div>
-
-{% if current_user.user_type in [1, 2] %}
-<div class="date-filter-container" id="date_dashboard">
-  <div class="date-filter-card">
-    <span class="filter-title">Seleccionar Rango de Fechas</span>
-    <div class="date-inputs">
-      <div class="input-group">
-        <label for="fecha_inicio">Desde:</label>
-        <input type="date" id="fecha_inicio" name="fecha_inicio">
+  <div class="dashboard-header">
+    <div class="dashboard-intro">
+      <span class="intro-eyebrow">Visión general</span>
+      <h2>Dashboard <span class="highlight">Principal</span></h2>
+      <p class="intro-description">
+        Observa la actividad consolidada de ventas, inventario y el pulso de tus sucursales en un solo lugar.
+      </p>
+      <div class="insight-badges">
+        <span class="badge">Ventas</span>
+        <span class="badge">Inventario</span>
+        <span class="badge">Alertas</span>
       </div>
-      <div class="input-group">
-        <label for="fecha_fin">Hasta:</label>
-        <input type="date" id="fecha_fin" name="fecha_fin">
-      </div>
-      <button id="apply_filter" class="btn-apply-filter">Aplicar Filtro</button>
     </div>
+    {% if current_user.user_type in [1, 2] %}
+    <div class="dashboard-filter" id="date_dashboard">
+      <div class="date-filter-card">
+        <span class="filter-title">Rango de fechas</span>
+        <p class="filter-description">Ajusta el análisis para comparar periodos clave.</p>
+        <div class="date-inputs">
+          <div class="input-group">
+            <label for="fecha_inicio">Desde</label>
+            <input type="date" id="fecha_inicio" name="fecha_inicio">
+          </div>
+          <div class="input-group">
+            <label for="fecha_fin">Hasta</label>
+            <input type="date" id="fecha_fin" name="fecha_fin">
+          </div>
+        </div>
+        <button id="apply_filter" class="btn-apply-filter">Aplicar filtro</button>
+      </div>
+    </div>
+    {% endif %}
   </div>
 </div>
-{% endif %}
 
 <div class="stats-grid" id="stats_grid">
   {% if current_user.user_type in [1, 2] %}
-  <div class="stat-card green clickable" data-detail="sales">
+  <div class="stat-card accent clickable" data-detail="sales">
     <div class="stat-content">
       <div class="stat-info">
         <p>Ventas Totales</p>
@@ -40,7 +53,7 @@
   </div>
   {% endif %}
 
-  <div class="stat-card blue clickable" data-detail="products">
+  <div class="stat-card neutral clickable" data-detail="products">
     <div class="stat-content">
       <div class="stat-info">
         <p>Productos en Stock</p>
@@ -52,7 +65,7 @@
     </div>
   </div>
 
-  <div class="stat-card red clickable" data-detail="alerts">
+  <div class="stat-card alert clickable" data-detail="alerts">
     <div class="stat-content">
       <div class="stat-info">
         <p>Alertas de Stock</p>
@@ -64,7 +77,7 @@
     </div>
   </div>
 
-  <div class="stat-card purple clickable" data-detail="stores">
+  <div class="stat-card outline clickable" data-detail="stores">
     <div class="stat-content">
       <div class="stat-info">
         <p>Sucursales Activas</p>
