@@ -1,37 +1,137 @@
 {% extends 'layout_usuarios.html' %}
-
 {% block title %} Dashboard | Distrito 5{% endblock %}
 
 {% block content %}
-
 <div class="dashboard_container" id="dashboard_container">
-    <h2>Dashboard <span class="highlight">Principal</span></h2>
-</div>
-{% if current_user.user_type == 1 %}
-<div class="date-info" id="date_dashboard" style="position: right">
-    <form method="POST" action="/process_date_range">
-        <span class="date">Seleccionar Rango de Fechas</span>
-        <label for="first">Desde (Fecha de Inicio):</label>
-        <input type="date" id="fecha_inicio" name="fecha_inicio" required>
-        <br><br>
-        <label for="fecha_fin">Hasta (Fecha de Fin):</label>
-        <input type="date" id="fecha_fin" name="fecha_fin" required>
-    </form>
-</div>
-<div class="store_summary" id="store_summary">
-    <!-- Aquí van los resúmenes de las tiendas para el administrador -->
+  <h2>Dashboard <span class="highlight">Principal</span></h2>
 </div>
 
-<div class="top_products" id="top_products">
-    <!-- Aquí van los productos más vendidos -->
-</div>
-
-<div class="notifications_products" id="notifications_products">
-    <!-- Aquí van las notificaciones de productos bajos en inventario -->
+{% if current_user.user_type in [1, 2] %}
+<div class="date-filter-container" id="date_dashboard">
+  <div class="date-filter-card">
+    <span class="filter-title">Seleccionar Rango de Fechas</span>
+    <div class="date-inputs">
+      <div class="input-group">
+        <label for="fecha_inicio">Desde:</label>
+        <input type="date" id="fecha_inicio" name="fecha_inicio">
+      </div>
+      <div class="input-group">
+        <label for="fecha_fin">Hasta:</label>
+        <input type="date" id="fecha_fin" name="fecha_fin">
+      </div>
+      <button id="apply_filter" class="btn-apply-filter">Aplicar Filtro</button>
+    </div>
+  </div>
 </div>
 {% endif %}
+
+<div class="stats-grid" id="stats_grid">
+  {% if current_user.user_type in [1, 2] %}
+  <div class="stat-card green clickable" data-detail="sales">
+    <div class="stat-content">
+      <div class="stat-info">
+        <p>Ventas Totales</p>
+        <p class="stat-value" id="total_sales">$0</p>
+      </div>
+      <div class="stat-icon">
+        <i class="fas fa-shopping-bag fa-lg"></i>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="stat-card blue clickable" data-detail="products">
+    <div class="stat-content">
+      <div class="stat-info">
+        <p>Productos en Stock</p>
+        <p class="stat-value" id="total_products">0</p>
+      </div>
+      <div class="stat-icon">
+        <i class="fas fa-box fa-lg"></i>
+      </div>
+    </div>
+  </div>
+
+  <div class="stat-card red clickable" data-detail="alerts">
+    <div class="stat-content">
+      <div class="stat-info">
+        <p>Alertas de Stock</p>
+        <p class="stat-value" id="stock_alerts">0</p>
+      </div>
+      <div class="stat-icon">
+        <i class="fas fa-exclamation-triangle fa-lg"></i>
+      </div>
+    </div>
+  </div>
+
+  <div class="stat-card purple clickable" data-detail="stores">
+    <div class="stat-content">
+      <div class="stat-info">
+        <p>Sucursales Activas</p>
+        <p class="stat-value" id="active_stores">0</p>
+      </div>
+      <div class="stat-icon">
+        <i class="fas fa-store fa-lg"></i>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="detail_modal" class="modal">
+  <div class="modal-content">
+    <span class="modal-close">&times;</span>
+    <h3 id="modal_title">Detalles</h3>
+    <div id="modal_body" class="modal-body"></div>
+  </div>
+</div>
+
+<div class="content-grid">
+  <div class="card">
+    <h3>Top Productos</h3>
+    <div class="products-list" id="top_products">
+      <div class="loading-spinner">
+        <i class="fas fa-spinner fa-spin"></i> Cargando...
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Alertas Recientes</h3>
+    <div class="alerts-list" id="notifications_products">
+      <div class="loading-spinner">
+        <i class="fas fa-spinner fa-spin"></i> Cargando...
+      </div>
+    </div>
+  </div>
+
+  {% if current_user.user_type in [1, 2] %}
+  <div class="card">
+    <h3>Ventas por Tienda</h3>
+    <div class="store-sales-list" id="store_summary">
+      <div class="loading-spinner">
+        <i class="fas fa-spinner fa-spin"></i> Cargando...
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<div id="alert_modal" class="modal">
+  <div class="modal-content modal-small">
+    <h3>Confirmar Acción</h3>
+    <p id="alert_modal_message">¿Desea marcar esta alerta como resuelta?</p>
+    <div class="modal-actions">
+      <button id="confirm_alert" class="btn-confirm">Aceptar</button>
+      <button id="cancel_alert" class="btn-cancel">Cancelar</button>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
+<script>
+  // Fuerza número para evitar comparar string vs number en JS
+  window.USER_TYPE = Number('{{ current_user.user_type | default(0) }}');
+</script>
 <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
 {% endblock %}
