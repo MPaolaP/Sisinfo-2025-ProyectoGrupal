@@ -6,7 +6,7 @@
   <section class="module-card session-card">
     <div class="card-header">
       <div>
-        <h2>Control de Caja Diaria</h2>
+        <h2>Control de Caja <span class="highlight">Diaria</span></h2>
         <p>Gestiona la apertura y cierre de caja para registrar tus ventas diarias.</p>
       </div>
       <span class="status-tag" id="session_status_tag">Sin sesión</span>
@@ -40,7 +40,7 @@
   <section class="module-card pos-card">
     <div class="card-header">
       <div>
-        <h2>Punto de Venta (POS)</h2>
+        <h2>Punto de Venta <span class="highlight">(POS)</span></h2>
         <p>Escanea productos con código de barras o QR y genera la factura en segundos.</p>
       </div>
       <div class="pos-session-info" id="pos_session_info">Caja no iniciada</div>
@@ -50,6 +50,23 @@
         <div class="input-stack">
           <label for="scanner_input">Escáner</label>
           <input type="text" id="scanner_input" placeholder="Escanea un código de barras o QR" autocomplete="off">
+        </div>
+        <div class="scanner-tools">
+          <button type="button" class="btn ghost" id="toggle_scanner_btn">
+            <i class="fas fa-camera"></i>
+            Usar cámara
+          </button>
+          <button type="button" class="btn ghost" id="stop_scanner_btn" disabled>
+            <i class="fas fa-stop"></i>
+            Detener escáner
+          </button>
+        </div>
+        <div class="scanner-container" id="scanner_container" aria-live="polite">
+          <video id="scanner_video" class="scanner-preview" autoplay muted playsinline></video>
+          <div class="scanner-status" id="scanner_status">
+            <i class="fas fa-info-circle"></i>
+            <span>Activa la cámara para comenzar a leer códigos de barras o QR.</span>
+          </div>
         </div>
         <div class="input-stack">
           <label for="product_search">Buscar producto</label>
@@ -117,7 +134,7 @@
   <section class="module-card customer-card">
     <div class="card-header">
       <div>
-        <h2>Gestión de clientes</h2>
+        <h2>Gestión de <span class="highlight">Clientes</span></h2>
         <p>Administra la base de clientes y consulta el historial de compras.</p>
       </div>
     </div>
@@ -155,7 +172,7 @@
   <section class="module-card invoices-card">
     <div class="card-header">
       <div>
-        <h2>Facturación reciente</h2>
+        <h2>Facturación <span class="highlight">Reciente</span></h2>
         <p>Consulta las últimas facturas generadas en el punto de venta.</p>
       </div>
       <button type="button" class="btn ghost" id="refresh_invoices_btn">Actualizar</button>
@@ -180,5 +197,6 @@
     invoices: "{{ url_for('recent_invoices') }}"
   };
 </script>
+<script src="https://unpkg.com/@zxing/library@0.20.0/umd/index.min.js" integrity="sha384-BUg0obJNdDG8zvI4NCzCBNQZknftCBVK5NVNHX6DBZp9YeFHOnjLeQk3RQy4wg8x" crossorigin="anonymous"></script>
 <script src="{{ url_for('static', filename='js/sales.js') }}"></script>
 {% endblock %}

@@ -959,7 +959,26 @@ def create_app(config_class=DevelopmentConfig):
     @login_required
     def search_products_for_pos():
         ensure_management_access()
+        code = (request.args.get('code') or '').strip()
         query = (request.args.get('query') or '').strip()
+
+        results = []
+
+        if code:
+            product = Product.query.filter(func.lower(Product.sku) == code.lower()).first()
+            if product:
+                inventory_item = None
+                if current_user.user_type in [1, 2]:
+                    inventory_item = Inventory.query.filter_by(product_id=product.id).first()
+                results.append({
+                    'id': product.id,
+                    'name': product.name,
+                    'sku': product.sku,
+                    'price': float(product.price or 0),
+                    'stock': inventory_item.quantity if inventory_item else None
+                })
+            return jsonify({'results': results})
+
         if not query:
             return jsonify({'results': []})
 
@@ -971,7 +990,6 @@ def create_app(config_class=DevelopmentConfig):
             )
         ).limit(15).all()
 
-        results = []
         for product in products:
             inventory_item = None
             if current_user.user_type in [1, 2]:

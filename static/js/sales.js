@@ -5,7 +5,10 @@
         cart: [],
         customers: [],
         session: null,
-        customerHistory: {}
+        customerHistory: {},
+        scannerActive: false,
+        lastScanCode: null,
+        lastScanTime: 0
     };
 
     const elements = {
@@ -36,8 +39,15 @@
         customersList: document.getElementById('customers_list'),
         customerHistory: document.getElementById('customer_history'),
         invoiceList: document.getElementById('invoice_list'),
-        refreshInvoicesBtn: document.getElementById('refresh_invoices_btn')
+        refreshInvoicesBtn: document.getElementById('refresh_invoices_btn'),
+        toggleScannerBtn: document.getElementById('toggle_scanner_btn'),
+        stopScannerBtn: document.getElementById('stop_scanner_btn'),
+        scannerContainer: document.getElementById('scanner_container'),
+        scannerVideo: document.getElementById('scanner_video'),
+        scannerStatus: document.getElementById('scanner_status')
     };
+
+    let scannerReader = null;
 
     function showToast(message, type = 'info') {
         if (!toastEl) return;
@@ -62,6 +72,152 @@
             throw new Error(data.error || 'Error al procesar la solicitud');
         }
         return data;
+    }
+
+    function setScannerStatus(message, tone = 'info') {
+        if (!elements.scannerStatus) return;
+        const iconMap = {
+            success: 'fas fa-check-circle',
+            error: 'fas fa-exclamation-circle',
+            warning: 'fas fa-exclamation-triangle',
+            info: 'fas fa-info-circle'
+        };
+        const icon = document.createElement('i');
+        icon.className = iconMap[tone] || iconMap.info;
+        const span = document.createElement('span');
+        span.textContent = message;
+        elements.scannerStatus.dataset.tone = tone;
+        elements.scannerStatus.innerHTML = '';
+        elements.scannerStatus.appendChild(icon);
+        elements.scannerStatus.appendChild(span);
+    }
+
+    function setScannerUIActive(active) {
+        if (!elements.scannerContainer) return;
+        elements.scannerContainer.classList.toggle('active', active);
+        if (elements.toggleScannerBtn) {
+            elements.toggleScannerBtn.disabled = active;
+        }
+        if (elements.stopScannerBtn) {
+            elements.stopScannerBtn.disabled = !active;
+        }
+        state.scannerActive = active;
+    }
+
+    function stopScanner(updateStatus = true) {
+        if (!state.scannerActive && !elements.scannerVideo?.srcObject) {
+            if (updateStatus) {
+                setScannerStatus('Escáner inactivo. Activa la cámara para leer códigos.', 'info');
+            }
+            return;
+        }
+        try {
+            if (scannerReader) {
+                scannerReader.reset();
+            }
+        } catch (error) {
+            console.warn('Error al detener el escáner', error);
+        }
+        if (elements.scannerVideo && elements.scannerVideo.srcObject) {
+            elements.scannerVideo.srcObject.getTracks().forEach((track) => track.stop());
+            elements.scannerVideo.srcObject = null;
+        }
+        setScannerUIActive(false);
+        state.lastScanCode = null;
+        state.lastScanTime = 0;
+        if (updateStatus) {
+            setScannerStatus('Escáner inactivo. Activa la cámara para leer códigos.', 'info');
+        }
+    }
+
+    function handleScanResult(rawValue) {
+        const code = String(rawValue || '').trim();
+        if (!code) return;
+        const now = Date.now();
+        if (code === state.lastScanCode && now - state.lastScanTime < 1500) {
+            return;
+        }
+        state.lastScanCode = code;
+        state.lastScanTime = now;
+        if (elements.scannerInput) {
+            elements.scannerInput.value = code;
+        }
+        fetchProductByCode(code, { fromScanner: true });
+    }
+
+    function startScanner() {
+        if (!elements.scannerContainer) return;
+        if (state.scannerActive) {
+            setScannerStatus('El escáner ya está activo.', 'info');
+            return;
+        }
+        if (typeof ZXing === 'undefined' || !ZXing.BrowserMultiFormatReader) {
+            showToast('No fue posible inicializar el lector de códigos.', 'error');
+            setScannerStatus('No se pudo cargar el lector de códigos. Verifica tu conexión e inténtalo de nuevo.', 'error');
+            return;
+        }
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            showToast('Este dispositivo no permite acceder a la cámara.', 'warning');
+            setScannerStatus('Tu navegador no permite utilizar la cámara.', 'error');
+            return;
+        }
+        if (!scannerReader) {
+            scannerReader = new ZXing.BrowserMultiFormatReader();
+        }
+        setScannerUIActive(true);
+        setScannerStatus('Apunta la cámara al código y manténlo enfocado.', 'info');
+        scannerReader
+            .decodeFromVideoDevice(null, elements.scannerVideo, (result) => {
+                if (result) {
+                    const text = typeof result.getText === 'function' ? result.getText() : result.text;
+                    handleScanResult(text);
+                }
+            })
+            .catch((error) => {
+                console.error('Error al iniciar el escáner', error);
+                stopScanner(false);
+                showToast(error.message || 'No se pudo iniciar el escáner.', 'error');
+                setScannerStatus('No fue posible acceder a la cámara.', 'error');
+            });
+    }
+
+    async function fetchProductByCode(code, { showResultsOnMiss = false, fromScanner = false } = {}) {
+        if (!endpoints.products) return null;
+        const value = String(code || '').trim();
+        if (!value) return null;
+        try {
+            if (fromScanner) {
+                setScannerStatus(`Buscando código ${value}...`, 'info');
+            }
+            const url = `${endpoints.products}?code=${encodeURIComponent(value)}`;
+            const data = await fetchJSON(url);
+            const [product] = data.results || [];
+            if (!product) {
+                if (fromScanner) {
+                    setScannerStatus(`No se encontró un producto con el código ${value}.`, 'warning');
+                } else if (showResultsOnMiss) {
+                    showToast('No se encontró un producto con ese código.', 'warning');
+                }
+                if (showResultsOnMiss) {
+                    searchProducts(value);
+                }
+                return null;
+            }
+            addProductToCart(product);
+            if (fromScanner) {
+                setScannerStatus(`Producto agregado: ${product.name}`, 'success');
+            } else {
+                showToast(`Producto agregado: ${product.name}`, 'success');
+            }
+            return product;
+        } catch (error) {
+            if (fromScanner) {
+                setScannerStatus(error.message, 'error');
+            } else {
+                showToast(error.message, 'error');
+            }
+            return null;
+        }
     }
 
     function setSessionStatus(text, status = 'empty') {
@@ -501,7 +657,7 @@
                     event.preventDefault();
                     const value = elements.scannerInput.value.trim();
                     if (value) {
-                        searchProducts(value);
+                        fetchProductByCode(value, { showResultsOnMiss: true });
                         elements.scannerInput.value = '';
                     }
                 }
@@ -564,6 +720,12 @@
         if (elements.refreshInvoicesBtn) {
             elements.refreshInvoicesBtn.addEventListener('click', loadInvoices);
         }
+        if (elements.toggleScannerBtn) {
+            elements.toggleScannerBtn.addEventListener('click', startScanner);
+        }
+        if (elements.stopScannerBtn) {
+            elements.stopScannerBtn.addEventListener('click', () => stopScanner());
+        }
     }
 
     async function searchProducts(query) {
@@ -579,6 +741,15 @@
 
     function init() {
         attachEvents();
+        if (elements.scannerStatus) {
+            setScannerStatus('Activa la cámara para comenzar a leer códigos de barras o QR.', 'info');
+        }
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                stopScanner(false);
+            }
+        });
+        window.addEventListener('beforeunload', () => stopScanner(false));
         loadCurrentSession();
         loadCustomers();
         loadInvoices();
