@@ -1,10 +1,10 @@
-from flask import Flask, render_template, redirect, url_for, request, jsonify, abort
+from flask import Flask, render_template, redirect, url_for, request, jsonify, abort, current_app
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from Modelo.conexion import DevelopmentConfig
 from datetime import datetime, timedelta, date
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, case
 from decimal import Decimal
 
 db = SQLAlchemy()
@@ -345,7 +345,12 @@ def create_app(config_class=DevelopmentConfig):
     @app.route('/reports')
     @login_required
     def reports():
-        return render_template('dashboard.html', username=current_user.username)
+        ensure_management_access()
+        return render_template(
+            'reports.html',
+            username=current_user.username,
+            user_type=current_user.user_type
+        )
 
     @app.route('/manage_users')
     @login_required
@@ -355,7 +360,12 @@ def create_app(config_class=DevelopmentConfig):
     @app.route('/products_clients')
     @login_required
     def products_clients():
-        return render_template('dashboard.html', username=current_user.username)
+        ensure_management_access()
+        return render_template(
+            'clients.html',
+            username=current_user.username,
+            user_type=current_user.user_type
+        )
 
     @app.route('/logout')
     @login_required
@@ -369,6 +379,147 @@ def create_app(config_class=DevelopmentConfig):
         return render_template('dashboard.html',
                                username=current_user.username,
                                user_type=current_user.user_type)
+
+    # ======= API REPORTES =======
+    @app.route('/api/reports/inventory-overview', methods=['GET'])
+    @login_required
+    def reports_inventory_overview():
+        ensure_management_access()
+
+        alert_case = case((func.coalesce(Inventory.quantity, 0) <= func.coalesce(Inventory.min_stock, 0), 1), else_=0)
+        store_totals = db.session.query(
+            Store.id.label('store_id'),
+            Store.name.label('store_name'),
+            func.coalesce(func.sum(Inventory.quantity), 0).label('units'),
+            func.coalesce(func.sum(alert_case), 0).label('alerts')
+        ).outerjoin(Inventory, Inventory.store_id == Store.id) \
+         .group_by(Store.id, Store.name) \
+         .order_by(Store.name).all()
+
+        total_units = sum(int(row.units or 0) for row in store_totals)
+        total_alerts = sum(int(row.alerts or 0) for row in store_totals)
+
+        return jsonify({
+            'last_updated': datetime.utcnow().strftime('%Y-%m-%d %H:%M'),
+            'total_units': total_units,
+            'total_alerts': total_alerts,
+            'stores': [
+                {
+                    'store_id': row.store_id,
+                    'store_name': row.store_name,
+                    'units': int(row.units or 0),
+                    'alerts': int(row.alerts or 0)
+                }
+                for row in store_totals
+            ]
+        })
+
+    @app.route('/api/reports/top-products', methods=['GET'])
+    @login_required
+    def reports_top_products():
+        ensure_management_access()
+
+        top_products = db.session.query(
+            Product.id.label('product_id'),
+            Product.name.label('product_name'),
+            func.coalesce(func.sum(Sale.quantity), 0).label('units_sold'),
+            func.coalesce(func.sum(Sale.total_amount), 0).label('total_amount')
+        ).join(Product, Sale.product_id == Product.id) \
+         .group_by(Product.id, Product.name) \
+         .order_by(func.sum(Sale.quantity).desc()) \
+         .limit(5).all()
+
+        return jsonify({
+            'products': [
+                {
+                    'product_id': row.product_id,
+                    'product_name': row.product_name,
+                    'units_sold': int(row.units_sold or 0),
+                    'total_amount': float(row.total_amount or 0)
+                }
+                for row in top_products
+            ]
+        })
+
+    @app.route('/api/reports/sales-kpis', methods=['GET'])
+    @login_required
+    def reports_sales_kpis():
+        ensure_management_access()
+
+        now = datetime.utcnow()
+        today_start = datetime.combine(date.today(), datetime.min.time())
+        today_end = datetime.combine(date.today(), datetime.max.time())
+        week_start = today_start - timedelta(days=6)
+        month_start = today_start - timedelta(days=29)
+
+        daily_total = db.session.query(func.coalesce(func.sum(Sale.total_amount), 0)).filter(
+            Sale.sale_date >= today_start,
+            Sale.sale_date <= today_end
+        ).scalar() or Decimal('0')
+
+        weekly_total = db.session.query(func.coalesce(func.sum(Sale.total_amount), 0)).filter(
+            Sale.sale_date >= week_start,
+            Sale.sale_date <= now
+        ).scalar() or Decimal('0')
+
+        monthly_total = db.session.query(func.coalesce(func.sum(Sale.total_amount), 0)).filter(
+            Sale.sale_date >= month_start,
+            Sale.sale_date <= now
+        ).scalar() or Decimal('0')
+
+        invoice_stats = db.session.query(
+            func.count(Invoice.id),
+            func.coalesce(func.sum(Invoice.total_amount), 0)
+        ).filter(
+            Invoice.created_at >= month_start,
+            Invoice.created_at <= now
+        ).one()
+
+        invoice_count = invoice_stats[0] or 0
+        invoice_total = invoice_stats[1] or Decimal('0')
+        avg_ticket = (invoice_total / invoice_count) if invoice_count else Decimal('0')
+
+        return jsonify({
+            'daily': float(daily_total),
+            'weekly': float(weekly_total),
+            'monthly': float(monthly_total),
+            'avg_ticket': float(avg_ticket)
+        })
+
+    @app.route('/api/reports/financial-indicators', methods=['GET'])
+    @login_required
+    def reports_financial_indicators():
+        ensure_management_access()
+
+        total_revenue = db.session.query(func.coalesce(func.sum(Invoice.total_amount), 0)).scalar() or Decimal('0')
+        active_customers = db.session.query(func.count(func.distinct(Invoice.customer_id))).filter(
+            Invoice.customer_id.isnot(None)
+        ).scalar() or 0
+        open_sessions = db.session.query(func.count(POSSession.id)).filter(POSSession.status == 'open').scalar() or 0
+        active_alerts = db.session.query(func.count(StockAlert.id)).filter(StockAlert.is_active.is_(True)).scalar() or 0
+
+        return jsonify({
+            'indicators': [
+                {'label': 'Facturación total', 'value': float(total_revenue), 'type': 'currency'},
+                {'label': 'Clientes con compras', 'value': int(active_customers), 'type': 'number'},
+                {'label': 'Cajas abiertas', 'value': int(open_sessions), 'type': 'number'},
+                {'label': 'Alertas de inventario', 'value': int(active_alerts), 'type': 'number'}
+            ]
+        })
+
+    @app.route('/api/reports/power-bi', methods=['GET'])
+    @login_required
+    def reports_power_bi():
+        ensure_management_access()
+
+        embed_url = current_app.config.get('POWER_BI_EMBED_URL')
+        status = 'connected' if embed_url else 'pending'
+
+        return jsonify({
+            'status': status,
+            'embed_url': embed_url,
+            'description': 'Solicita al administrador el enlace de tu tablero de Power BI para integrarlo en el sistema.'
+        })
 
     # ======= API INVENTARIO =======
     @app.route('/api/inventory/overview', methods=['GET'])
@@ -879,14 +1030,29 @@ def create_app(config_class=DevelopmentConfig):
             'total_sales': float(total_sales),
             'inventory': [{'name': n, 'quantity': q} for (n, q) in inventory_items]
         })
-    def serialize_customer(customer):
-        return {
+    def serialize_customer(customer, include_metrics=False):
+        data = {
             'id': customer.id,
             'name': customer.name,
             'email': customer.email,
             'phone': customer.phone,
             'created_at': customer.created_at.strftime('%Y-%m-%d %H:%M') if customer.created_at else None
         }
+
+        if include_metrics:
+            invoice_count, invoice_total, last_purchase = db.session.query(
+                func.count(Invoice.id),
+                func.coalesce(func.sum(Invoice.total_amount), 0),
+                func.max(Invoice.created_at)
+            ).filter(Invoice.customer_id == customer.id).one()
+
+            data.update({
+                'invoice_count': int(invoice_count or 0),
+                'total_spent': float(invoice_total or 0),
+                'last_purchase': last_purchase.strftime('%Y-%m-%d %H:%M') if last_purchase else None
+            })
+
+        return data
 
     def serialize_invoice(invoice):
         return {
@@ -911,7 +1077,20 @@ def create_app(config_class=DevelopmentConfig):
     def manage_customers_api():
         ensure_management_access()
         if request.method == 'GET':
-            customers = Customer.query.order_by(Customer.created_at.desc()).all()
+            query_value = (request.args.get('query') or '').strip()
+            base_query = Customer.query
+
+            if query_value:
+                like_value = f"%{query_value}%"
+                base_query = base_query.filter(
+                    or_(
+                        Customer.name.ilike(like_value),
+                        Customer.email.ilike(like_value),
+                        Customer.phone.ilike(like_value)
+                    )
+                )
+
+            customers = base_query.order_by(Customer.name.asc()).limit(100).all()
             return jsonify([serialize_customer(customer) for customer in customers])
 
         data = request.get_json(force=True)
@@ -951,7 +1130,7 @@ def create_app(config_class=DevelopmentConfig):
         customer = Customer.query.get_or_404(customer_id)
         invoices = Invoice.query.filter_by(customer_id=customer.id).order_by(Invoice.created_at.desc()).limit(25).all()
         return jsonify({
-            'customer': serialize_customer(customer),
+            'customer': serialize_customer(customer, include_metrics=True),
             'history': [serialize_invoice(invoice) for invoice in invoices]
         })
 
