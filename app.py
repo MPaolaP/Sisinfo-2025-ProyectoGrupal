@@ -5,6 +5,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from Modelo.conexion import DevelopmentConfig
 from datetime import datetime, timedelta, date
 from sqlalchemy import func, or_, case
+from sqlalchemy.orm import aliased
 from decimal import Decimal
 
 db = SQLAlchemy()
@@ -17,6 +18,7 @@ class User(UserMixin, db.Model):
     username = db.Column('username', db.String(100), unique=True, nullable=False)
     password_hash = db.Column('password', db.String(255), nullable=False)
     user_type = db.Column('user_type', db.Integer, nullable=False)
+    store_access = db.relationship('UserStoreAccess', back_populates='user', cascade='all, delete-orphan')
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -24,12 +26,26 @@ class User(UserMixin, db.Model):
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
 
+
+class UserStoreAccess(db.Model):
+    __tablename__ = 'user_store_access'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user_account.user_id'), nullable=False)
+    store_id = db.Column(db.Integer, db.ForeignKey('stores.store_id'), nullable=False)
+
+    user = db.relationship('User', back_populates='store_access')
+    store = db.relationship('Store', back_populates='user_access')
+
+    __table_args__ = (db.UniqueConstraint('user_id', 'store_id', name='uq_user_store_access'),)
+
+
 class Store(db.Model):
     __tablename__ = 'stores'
     id = db.Column('store_id', db.Integer, primary_key=True)
     name = db.Column('store_name', db.String(100), nullable=False)
     location = db.Column('location', db.String(200))
     active = db.Column('active', db.Boolean, default=True)
+    user_access = db.relationship('UserStoreAccess', back_populates='store', cascade='all, delete-orphan')
 
 class Category(db.Model):
     __tablename__ = 'categories'
@@ -277,8 +293,35 @@ def create_app(config_class=DevelopmentConfig):
 
     app.register_error_handler(404, page_not_found)
 
+    def ensure_admin_access():
+        if current_user.user_type != 1:
+            abort(403)
+
     def ensure_management_access():
         if current_user.user_type not in [1, 2]:
+            abort(403)
+
+    def get_accessible_store_ids(user=None):
+        user = user or current_user
+        if not getattr(user, 'is_authenticated', False):
+            return []
+        if user.user_type == 1:
+            return None
+        return [access.store_id for access in user.store_access]
+
+    def apply_store_filter(query, column):
+        store_ids = get_accessible_store_ids()
+        if store_ids is None:
+            return query
+        if not store_ids:
+            return query.filter(column.in_([-1]))
+        return query.filter(column.in_(store_ids))
+
+    def ensure_store_permission(store_id):
+        store_ids = get_accessible_store_ids()
+        if store_ids is None:
+            return
+        if store_id not in store_ids:
             abort(403)
 
     # ======= RUTAS =======
@@ -337,7 +380,11 @@ def create_app(config_class=DevelopmentConfig):
     @login_required
     def sales():
         ensure_management_access()
-        stores = Store.query.filter_by(active=True).order_by(Store.name).all()
+        stores_query = Store.query.filter_by(active=True)
+        store_ids = get_accessible_store_ids()
+        if store_ids is not None:
+            stores_query = stores_query.filter(Store.id.in_(store_ids))
+        stores = stores_query.order_by(Store.name).all()
         return render_template('sales.html',
                                username=current_user.username,
                                user_type=current_user.user_type,
@@ -355,7 +402,125 @@ def create_app(config_class=DevelopmentConfig):
     @app.route('/manage_users')
     @login_required
     def manage_users():
-        return render_template('dashboard.html', username=current_user.username)
+        ensure_admin_access()
+        return render_template('manage_users.html',
+                               username=current_user.username,
+                               user_type=current_user.user_type)
+
+    def serialize_user_account(user):
+        return {
+            'id': user.id,
+            'username': user.username,
+            'user_type': user.user_type,
+            'stores': [
+                {
+                    'id': access.store.id,
+                    'name': access.store.name
+                }
+                for access in user.store_access if access.store
+            ]
+        }
+
+    @app.route('/api/users', methods=['GET', 'POST'])
+    @login_required
+    def manage_users_api():
+        ensure_admin_access()
+        if request.method == 'GET':
+            users = User.query.filter(User.user_type.in_([2, 3])).order_by(User.username).all()
+            stores = Store.query.filter_by(active=True).order_by(Store.name).all()
+            return jsonify({
+                'users': [serialize_user_account(user) for user in users],
+                'stores': [{'id': store.id, 'name': store.name} for store in stores]
+            })
+
+        data = request.get_json(force=True)
+        username = (data.get('username') or '').strip()
+        password = (data.get('password') or '').strip()
+        user_type = data.get('user_type')
+        store_ids = data.get('store_ids') or []
+
+        if not username or not password:
+            return jsonify({'error': 'El nombre de usuario y la contraseña son obligatorios.'}), 400
+
+        if user_type not in [2, 3]:
+            return jsonify({'error': 'Solo se pueden crear usuarios de tipo gerente o auxiliar.'}), 400
+
+        existing = User.query.filter(func.lower(User.username) == username.lower()).first()
+        if existing:
+            return jsonify({'error': 'El nombre de usuario ya está en uso.'}), 400
+
+        if not isinstance(store_ids, list) or not store_ids:
+            return jsonify({'error': 'Debe asignar al menos una sucursal al usuario.'}), 400
+
+        try:
+            store_ids = [int(store_id) for store_id in store_ids]
+        except (TypeError, ValueError):
+            return jsonify({'error': 'Las sucursales proporcionadas no son válidas.'}), 400
+        stores = Store.query.filter(Store.id.in_(store_ids)).all()
+        if len(stores) != len(set(store_ids)):
+            return jsonify({'error': 'Alguna de las sucursales seleccionadas no existe.'}), 400
+
+        user = User(username=username, user_type=user_type)
+        user.set_password(password)
+        user.store_access = [UserStoreAccess(store=store) for store in stores]
+
+        db.session.add(user)
+        db.session.commit()
+
+        return jsonify({'message': 'Usuario creado correctamente.', 'user': serialize_user_account(user)}), 201
+
+    @app.route('/api/users/<int:user_id>', methods=['PUT', 'DELETE'])
+    @login_required
+    def update_user(user_id):
+        ensure_admin_access()
+        user = User.query.get_or_404(user_id)
+
+        if user.user_type == 1:
+            return jsonify({'error': 'No es posible modificar este usuario.'}), 400
+
+        if request.method == 'DELETE':
+            db.session.delete(user)
+            db.session.commit()
+            return jsonify({'message': 'Usuario eliminado correctamente.'})
+
+        data = request.get_json(force=True)
+
+        username = data.get('username')
+        if username is not None:
+            username = username.strip()
+            if not username:
+                return jsonify({'error': 'El nombre de usuario no puede estar vacío.'}), 400
+            existing = User.query.filter(func.lower(User.username) == username.lower(), User.id != user.id).first()
+            if existing:
+                return jsonify({'error': 'El nombre de usuario ya está en uso.'}), 400
+            user.username = username
+
+        if 'user_type' in data:
+            new_type = data.get('user_type')
+            if new_type not in [2, 3]:
+                return jsonify({'error': 'Solo se permiten usuarios tipo gerente o auxiliar.'}), 400
+            user.user_type = new_type
+
+        password = data.get('password')
+        if password:
+            user.set_password(password.strip())
+
+        if 'store_ids' in data:
+            raw_store_ids = data.get('store_ids') or []
+            if not isinstance(raw_store_ids, list) or (user.user_type in [2, 3] and not raw_store_ids):
+                return jsonify({'error': 'Debe asignar al menos una sucursal al usuario.'}), 400
+            try:
+                store_ids = [int(store_id) for store_id in raw_store_ids]
+            except (TypeError, ValueError):
+                return jsonify({'error': 'Las sucursales proporcionadas no son válidas.'}), 400
+            stores = Store.query.filter(Store.id.in_(store_ids)).all()
+            if len(stores) != len(set(store_ids)):
+                return jsonify({'error': 'Alguna de las sucursales seleccionadas no existe.'}), 400
+            user.store_access = [UserStoreAccess(store=store) for store in stores]
+
+        db.session.commit()
+
+        return jsonify({'message': 'Usuario actualizado correctamente.', 'user': serialize_user_account(user)})
 
     @app.route('/products_clients')
     @login_required
@@ -387,14 +552,17 @@ def create_app(config_class=DevelopmentConfig):
         ensure_management_access()
 
         alert_case = case((func.coalesce(Inventory.quantity, 0) <= func.coalesce(Inventory.min_stock, 0), 1), else_=0)
-        store_totals = db.session.query(
+        store_totals_query = db.session.query(
             Store.id.label('store_id'),
             Store.name.label('store_name'),
             func.coalesce(func.sum(Inventory.quantity), 0).label('units'),
             func.coalesce(func.sum(alert_case), 0).label('alerts')
         ).outerjoin(Inventory, Inventory.store_id == Store.id) \
          .group_by(Store.id, Store.name) \
-         .order_by(Store.name).all()
+         .order_by(Store.name)
+
+        store_totals_query = apply_store_filter(store_totals_query, Store.id)
+        store_totals = store_totals_query.all()
 
         total_units = sum(int(row.units or 0) for row in store_totals)
         total_alerts = sum(int(row.alerts or 0) for row in store_totals)
@@ -419,15 +587,17 @@ def create_app(config_class=DevelopmentConfig):
     def reports_top_products():
         ensure_management_access()
 
-        top_products = db.session.query(
+        top_products_query = db.session.query(
             Product.id.label('product_id'),
             Product.name.label('product_name'),
             func.coalesce(func.sum(Sale.quantity), 0).label('units_sold'),
             func.coalesce(func.sum(Sale.total_amount), 0).label('total_amount')
         ).join(Product, Sale.product_id == Product.id) \
          .group_by(Product.id, Product.name) \
-         .order_by(func.sum(Sale.quantity).desc()) \
-         .limit(5).all()
+         .order_by(func.sum(Sale.quantity).desc())
+
+        top_products_query = apply_store_filter(top_products_query, Sale.store_id)
+        top_products = top_products_query.limit(5).all()
 
         return jsonify({
             'products': [
@@ -452,28 +622,36 @@ def create_app(config_class=DevelopmentConfig):
         week_start = today_start - timedelta(days=6)
         month_start = today_start - timedelta(days=29)
 
-        daily_total = db.session.query(func.coalesce(func.sum(Sale.total_amount), 0)).filter(
+        daily_query = db.session.query(func.coalesce(func.sum(Sale.total_amount), 0)).filter(
             Sale.sale_date >= today_start,
             Sale.sale_date <= today_end
-        ).scalar() or Decimal('0')
+        )
+        daily_query = apply_store_filter(daily_query, Sale.store_id)
+        daily_total = daily_query.scalar() or Decimal('0')
 
-        weekly_total = db.session.query(func.coalesce(func.sum(Sale.total_amount), 0)).filter(
+        weekly_query = db.session.query(func.coalesce(func.sum(Sale.total_amount), 0)).filter(
             Sale.sale_date >= week_start,
             Sale.sale_date <= now
-        ).scalar() or Decimal('0')
+        )
+        weekly_query = apply_store_filter(weekly_query, Sale.store_id)
+        weekly_total = weekly_query.scalar() or Decimal('0')
 
-        monthly_total = db.session.query(func.coalesce(func.sum(Sale.total_amount), 0)).filter(
+        monthly_query = db.session.query(func.coalesce(func.sum(Sale.total_amount), 0)).filter(
             Sale.sale_date >= month_start,
             Sale.sale_date <= now
-        ).scalar() or Decimal('0')
+        )
+        monthly_query = apply_store_filter(monthly_query, Sale.store_id)
+        monthly_total = monthly_query.scalar() or Decimal('0')
 
-        invoice_stats = db.session.query(
+        invoice_stats_query = db.session.query(
             func.count(Invoice.id),
             func.coalesce(func.sum(Invoice.total_amount), 0)
         ).filter(
             Invoice.created_at >= month_start,
             Invoice.created_at <= now
-        ).one()
+        )
+        invoice_stats_query = apply_store_filter(invoice_stats_query, Invoice.store_id)
+        invoice_stats = invoice_stats_query.one()
 
         invoice_count = invoice_stats[0] or 0
         invoice_total = invoice_stats[1] or Decimal('0')
@@ -491,12 +669,25 @@ def create_app(config_class=DevelopmentConfig):
     def reports_financial_indicators():
         ensure_management_access()
 
-        total_revenue = db.session.query(func.coalesce(func.sum(Invoice.total_amount), 0)).scalar() or Decimal('0')
-        active_customers = db.session.query(func.count(func.distinct(Invoice.customer_id))).filter(
+        total_revenue_query = db.session.query(func.coalesce(func.sum(Invoice.total_amount), 0))
+        total_revenue_query = apply_store_filter(total_revenue_query, Invoice.store_id)
+        total_revenue = total_revenue_query.scalar() or Decimal('0')
+
+        active_customers_query = db.session.query(func.count(func.distinct(Invoice.customer_id))).filter(
             Invoice.customer_id.isnot(None)
-        ).scalar() or 0
-        open_sessions = db.session.query(func.count(POSSession.id)).filter(POSSession.status == 'open').scalar() or 0
-        active_alerts = db.session.query(func.count(StockAlert.id)).filter(StockAlert.is_active.is_(True)).scalar() or 0
+        )
+        active_customers_query = apply_store_filter(active_customers_query, Invoice.store_id)
+        active_customers = active_customers_query.scalar() or 0
+
+        open_sessions_query = db.session.query(func.count(POSSession.id)).filter(POSSession.status == 'open')
+        open_sessions_query = apply_store_filter(open_sessions_query, POSSession.store_id)
+        open_sessions = open_sessions_query.scalar() or 0
+
+        active_alerts_query = db.session.query(func.count(StockAlert.id)).join(
+            Inventory, StockAlert.inventory_id == Inventory.id
+        ).filter(StockAlert.is_active.is_(True))
+        active_alerts_query = apply_store_filter(active_alerts_query, Inventory.store_id)
+        active_alerts = active_alerts_query.scalar() or 0
 
         return jsonify({
             'indicators': [
@@ -525,7 +716,7 @@ def create_app(config_class=DevelopmentConfig):
     @app.route('/api/inventory/overview', methods=['GET'])
     @login_required
     def inventory_overview():
-        inventory_rows = db.session.query(
+        inventory_query = db.session.query(
             Inventory.id.label('inventory_id'),
             Inventory.quantity,
             Inventory.min_stock,
@@ -542,6 +733,9 @@ def create_app(config_class=DevelopmentConfig):
          .join(Store, Inventory.store_id == Store.id) \
          .outerjoin(Category, Product.category_id == Category.id) \
          .order_by(Store.name, Product.name)
+
+        inventory_query = apply_store_filter(inventory_query, Store.id)
+        inventory_rows = inventory_query.all()
 
         items = []
         total_units = 0
@@ -580,12 +774,29 @@ def create_app(config_class=DevelopmentConfig):
                 'low_stock': is_low
             })
 
-        active_alerts = StockAlert.query.filter_by(is_active=True).count()
-        pending_transfers = TransferRequest.query.filter(
-            TransferRequest.status.in_(['pending', 'approved'])
-        ).count()
+        active_alerts_query = db.session.query(func.count(StockAlert.id)).join(
+            Inventory, StockAlert.inventory_id == Inventory.id
+        ).filter(StockAlert.is_active.is_(True))
+        active_alerts_query = apply_store_filter(active_alerts_query, Inventory.store_id)
+        active_alerts = active_alerts_query.scalar() or 0
 
-        stores = Store.query.filter_by(active=True).order_by(Store.name).all()
+        transfers_query = db.session.query(func.count(TransferRequest.id)).filter(
+            TransferRequest.status.in_(['pending', 'approved'])
+        )
+        store_ids = get_accessible_store_ids()
+        if store_ids is not None:
+            transfers_query = transfers_query.filter(
+                or_(
+                    TransferRequest.source_store_id.in_(store_ids),
+                    TransferRequest.target_store_id.in_(store_ids)
+                )
+            )
+        pending_transfers = transfers_query.scalar() or 0
+
+        stores_query = Store.query.filter_by(active=True)
+        if store_ids is not None:
+            stores_query = stores_query.filter(Store.id.in_(store_ids))
+        stores = stores_query.order_by(Store.name).all()
         products = Product.query.order_by(Product.name).all()
 
         return jsonify({
@@ -622,7 +833,7 @@ def create_app(config_class=DevelopmentConfig):
     @app.route('/api/inventory/alerts', methods=['GET'])
     @login_required
     def inventory_alerts():
-        alerts = db.session.query(
+        alerts_query = db.session.query(
             StockAlert,
             Inventory.quantity,
             Inventory.min_stock,
@@ -634,6 +845,9 @@ def create_app(config_class=DevelopmentConfig):
          .join(Store, Inventory.store_id == Store.id) \
          .filter(StockAlert.is_active.is_(True)) \
          .order_by(StockAlert.created_at.desc())
+
+        alerts_query = apply_store_filter(alerts_query, Store.id)
+        alerts = alerts_query.all()
 
         return jsonify([
             {
@@ -654,7 +868,7 @@ def create_app(config_class=DevelopmentConfig):
     @login_required
     def inventory_movements():
         if request.method == 'GET':
-            movements = db.session.query(
+            movements_query = db.session.query(
                 InventoryMovement,
                 Product.name.label('product_name'),
                 Store.name.label('store_name'),
@@ -662,8 +876,10 @@ def create_app(config_class=DevelopmentConfig):
             ).join(Product, InventoryMovement.product_id == Product.id) \
              .join(Store, InventoryMovement.store_id == Store.id) \
              .outerjoin(User, InventoryMovement.performed_by == User.id) \
-             .order_by(InventoryMovement.created_at.desc()) \
-             .limit(50)
+             .order_by(InventoryMovement.created_at.desc())
+
+            movements_query = apply_store_filter(movements_query, InventoryMovement.store_id)
+            movements = movements_query.limit(50).all()
 
             return jsonify([
                 {
@@ -693,9 +909,12 @@ def create_app(config_class=DevelopmentConfig):
             return jsonify({'error': 'Información incompleta para registrar el movimiento'}), 400
 
         try:
+            store_id = int(store_id)
             quantity = int(quantity)
         except (TypeError, ValueError):
             return jsonify({'error': 'La cantidad debe ser un número entero'}), 400
+
+        ensure_store_permission(store_id)
 
         if quantity <= 0:
             return jsonify({'error': 'La cantidad debe ser mayor a cero'}), 400
@@ -737,7 +956,7 @@ def create_app(config_class=DevelopmentConfig):
             approver_user = aliased(User)
             confirmer_user = aliased(User)
 
-            transfers = db.session.query(
+            transfers_query = db.session.query(
                 TransferRequest,
                 Product.name.label('product_name'),
                 Product.sku,
@@ -756,12 +975,25 @@ def create_app(config_class=DevelopmentConfig):
              .outerjoin(confirmer_user, TransferRequest.confirmed_by == confirmer_user.id) \
              .order_by(TransferRequest.requested_at.desc())
 
+            store_ids = get_accessible_store_ids()
+            if store_ids is not None:
+                transfers_query = transfers_query.filter(
+                    or_(
+                        TransferRequest.source_store_id.in_(store_ids),
+                        TransferRequest.target_store_id.in_(store_ids)
+                    )
+                )
+
+            transfers = transfers_query.all()
+
             status_labels = {
                 'pending': 'Pendiente de aprobación',
                 'approved': 'Aprobada / En tránsito',
                 'completed': 'Recibida',
                 'rejected': 'Rechazada'
             }
+
+            accessible_ids = None if store_ids is None else set(store_ids)
 
             return jsonify([
                 {
@@ -782,8 +1014,16 @@ def create_app(config_class=DevelopmentConfig):
                     'approved_by': transfer.approver_name,
                     'confirmed_by': transfer.confirmer_name,
                     'notes': transfer.TransferRequest.notes,
-                    'can_approve': current_user.user_type in [1, 2] and transfer.TransferRequest.status == 'pending',
-                    'can_confirm': current_user.user_type in [1, 2] and transfer.TransferRequest.status == 'approved'
+                    'can_approve': (
+                        current_user.user_type in [1, 2]
+                        and transfer.TransferRequest.status == 'pending'
+                        and (accessible_ids is None or transfer.TransferRequest.source_store_id in accessible_ids)
+                    ),
+                    'can_confirm': (
+                        current_user.user_type in [1, 2]
+                        and transfer.TransferRequest.status == 'approved'
+                        and (accessible_ids is None or transfer.TransferRequest.target_store_id in accessible_ids)
+                    )
                 }
                 for transfer in transfers
             ])
@@ -812,6 +1052,9 @@ def create_app(config_class=DevelopmentConfig):
         if quantity <= 0:
             return jsonify({'error': 'La cantidad debe ser mayor a cero'}), 400
 
+        ensure_store_permission(source_store_id)
+        ensure_store_permission(target_store_id)
+
         transfer = TransferRequest(
             product_id=product_id,
             source_store_id=source_store_id,
@@ -835,6 +1078,8 @@ def create_app(config_class=DevelopmentConfig):
         transfer = TransferRequest.query.get_or_404(transfer_id)
         if transfer.status != 'pending':
             return jsonify({'error': 'Solo se pueden aprobar transferencias pendientes'}), 400
+
+        ensure_store_permission(transfer.source_store_id)
 
         try:
             adjust_inventory(
@@ -865,6 +1110,8 @@ def create_app(config_class=DevelopmentConfig):
         if transfer.status != 'approved':
             return jsonify({'error': 'Solo se pueden confirmar transferencias aprobadas'}), 400
 
+        ensure_store_permission(transfer.target_store_id)
+
         try:
             adjust_inventory(
                 product_id=transfer.product_id,
@@ -890,6 +1137,7 @@ def create_app(config_class=DevelopmentConfig):
         fecha_fin_str = request.args.get('fecha_fin')
         fecha_inicio, fecha_fin = get_date_range_filter(fecha_inicio_str, fecha_fin_str)
 
+        store_ids = get_accessible_store_ids()
         # filtro por fechas sólo para user_type 1 y 2
         query_filter = []
         if current_user.user_type in [1, 2]:
@@ -900,11 +1148,23 @@ def create_app(config_class=DevelopmentConfig):
             sales_query = db.session.query(func.sum(Sale.total_amount))
             if query_filter:
                 sales_query = sales_query.filter(*query_filter)
+            sales_query = apply_store_filter(sales_query, Sale.store_id)
             total_sales = sales_query.scalar() or 0
 
-        total_products = db.session.query(func.sum(Inventory.quantity)).scalar() or 0
-        stock_alerts = StockAlert.query.filter_by(is_active=True).count()
-        active_stores = Store.query.filter_by(active=True).count()
+        inventory_total_query = db.session.query(func.sum(Inventory.quantity))
+        inventory_total_query = apply_store_filter(inventory_total_query, Inventory.store_id)
+        total_products = inventory_total_query.scalar() or 0
+
+        stock_alerts_query = db.session.query(func.count(StockAlert.id)).join(
+            Inventory, StockAlert.inventory_id == Inventory.id
+        ).filter(StockAlert.is_active.is_(True))
+        stock_alerts_query = apply_store_filter(stock_alerts_query, Inventory.store_id)
+        stock_alerts = stock_alerts_query.scalar() or 0
+
+        active_stores_query = Store.query.filter_by(active=True)
+        if store_ids is not None:
+            active_stores_query = active_stores_query.filter(Store.id.in_(store_ids))
+        active_stores = active_stores_query.count()
 
         return jsonify({
             'total_sales': float(total_sales),
@@ -932,6 +1192,8 @@ def create_app(config_class=DevelopmentConfig):
         if fecha_inicio and fecha_fin:
             query = query.filter(Sale.sale_date.between(fecha_inicio, fecha_fin))
 
+        query = apply_store_filter(query, Store.id)
+
         results = query.all()
         return jsonify([{
             'store_id': r.store_id,
@@ -957,6 +1219,8 @@ def create_app(config_class=DevelopmentConfig):
         if current_user.user_type in [1, 2]:
             query = query.filter(Sale.sale_date.between(fecha_inicio, fecha_fin))
 
+        query = apply_store_filter(query, Sale.store_id)
+
         results = query.all()
         return jsonify([{
             'name': r.name,
@@ -966,7 +1230,7 @@ def create_app(config_class=DevelopmentConfig):
     @app.route('/api/dashboard/stock-alerts', methods=['GET'])
     @login_required
     def get_stock_alerts():
-        rows = db.session.query(
+        rows_query = db.session.query(
             StockAlert,
             Product.name.label('product_name'),
             Store.name.label('store_name'),
@@ -979,7 +1243,10 @@ def create_app(config_class=DevelopmentConfig):
             Store, Inventory.store_id == Store.id
         ).filter(
             StockAlert.is_active.is_(True)
-        ).all()
+        )
+
+        rows_query = apply_store_filter(rows_query, Store.id)
+        rows = rows_query.all()
 
         return jsonify([{
             'id': row.StockAlert.id,
@@ -995,6 +1262,8 @@ def create_app(config_class=DevelopmentConfig):
     @login_required
     def dismiss_alert(alert_id):
         alert = StockAlert.query.get_or_404(alert_id)
+        if alert.inventory:
+            ensure_store_permission(alert.inventory.store_id)
         alert.is_active = False
         db.session.commit()
         return jsonify({'success': True, 'message': 'Alerta eliminada'})
@@ -1009,6 +1278,7 @@ def create_app(config_class=DevelopmentConfig):
         fecha_fin_str = request.args.get('fecha_fin')
         fecha_inicio, fecha_fin = get_date_range_filter(fecha_inicio_str, fecha_fin_str)
 
+        ensure_store_permission(store_id)
         store = Store.query.get_or_404(store_id)
 
         sales_query = db.session.query(func.sum(Sale.total_amount)).filter(
@@ -1040,11 +1310,14 @@ def create_app(config_class=DevelopmentConfig):
         }
 
         if include_metrics:
-            invoice_count, invoice_total, last_purchase = db.session.query(
+            metrics_query = db.session.query(
                 func.count(Invoice.id),
                 func.coalesce(func.sum(Invoice.total_amount), 0),
                 func.max(Invoice.created_at)
-            ).filter(Invoice.customer_id == customer.id).one()
+            ).filter(Invoice.customer_id == customer.id)
+
+            metrics_query = apply_store_filter(metrics_query, Invoice.store_id)
+            invoice_count, invoice_total, last_purchase = metrics_query.one()
 
             data.update({
                 'invoice_count': int(invoice_count or 0),
@@ -1128,7 +1401,9 @@ def create_app(config_class=DevelopmentConfig):
     def get_customer_history(customer_id):
         ensure_management_access()
         customer = Customer.query.get_or_404(customer_id)
-        invoices = Invoice.query.filter_by(customer_id=customer.id).order_by(Invoice.created_at.desc()).limit(25).all()
+        invoices_query = Invoice.query.filter_by(customer_id=customer.id)
+        invoices_query = apply_store_filter(invoices_query, Invoice.store_id)
+        invoices = invoices_query.order_by(Invoice.created_at.desc()).limit(25).all()
         return jsonify({
             'customer': serialize_customer(customer, include_metrics=True),
             'history': [serialize_invoice(invoice) for invoice in invoices]
@@ -1148,7 +1423,9 @@ def create_app(config_class=DevelopmentConfig):
             if product:
                 inventory_item = None
                 if current_user.user_type in [1, 2]:
-                    inventory_item = Inventory.query.filter_by(product_id=product.id).first()
+                    inventory_query = Inventory.query.filter(Inventory.product_id == product.id)
+                    inventory_query = apply_store_filter(inventory_query, Inventory.store_id)
+                    inventory_item = inventory_query.first()
                 results.append({
                     'id': product.id,
                     'name': product.name,
@@ -1172,7 +1449,9 @@ def create_app(config_class=DevelopmentConfig):
         for product in products:
             inventory_item = None
             if current_user.user_type in [1, 2]:
-                inventory_item = Inventory.query.filter_by(product_id=product.id).first()
+                inventory_query = Inventory.query.filter(Inventory.product_id == product.id)
+                inventory_query = apply_store_filter(inventory_query, Inventory.store_id)
+                inventory_item = inventory_query.first()
             results.append({
                 'id': product.id,
                 'name': product.name,
@@ -1190,6 +1469,8 @@ def create_app(config_class=DevelopmentConfig):
         current_session = POSSession.query.filter_by(user_id=current_user.id, status='open').order_by(POSSession.opened_at.desc()).first()
         if not current_session:
             return jsonify({'session': None})
+
+        ensure_store_permission(current_session.store_id)
 
         total_sales = db.session.query(func.sum(Sale.total_amount)).filter(Sale.session_id == current_session.id).scalar() or Decimal('0')
         return jsonify({
@@ -1214,6 +1495,13 @@ def create_app(config_class=DevelopmentConfig):
 
         if not store_id:
             return jsonify({'error': 'Debe seleccionar una tienda para abrir la caja.'}), 400
+
+        try:
+            store_id = int(store_id)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'La tienda seleccionada no es válida.'}), 400
+
+        ensure_store_permission(store_id)
 
         existing = POSSession.query.filter_by(user_id=current_user.id, status='open').first()
         if existing:
@@ -1240,6 +1528,7 @@ def create_app(config_class=DevelopmentConfig):
     def close_pos_session(session_id):
         ensure_management_access()
         pos_session = POSSession.query.get_or_404(session_id)
+        ensure_store_permission(pos_session.store_id)
         if pos_session.user_id != current_user.id:
             return jsonify({'error': 'Solo el usuario que abrió la caja puede cerrarla.'}), 403
         if pos_session.status != 'open':
@@ -1280,6 +1569,8 @@ def create_app(config_class=DevelopmentConfig):
         current_session = POSSession.query.filter_by(user_id=current_user.id, status='open').first()
         if not current_session:
             return jsonify({'error': 'No hay una caja abierta. Abre una sesión de caja antes de registrar ventas.'}), 400
+
+        ensure_store_permission(current_session.store_id)
 
         # Validar inventario
         inventory_map = {}
@@ -1349,7 +1640,9 @@ def create_app(config_class=DevelopmentConfig):
     @login_required
     def recent_invoices():
         ensure_management_access()
-        invoices = Invoice.query.order_by(Invoice.created_at.desc()).limit(20).all()
+        invoices_query = Invoice.query
+        invoices_query = apply_store_filter(invoices_query, Invoice.store_id)
+        invoices = invoices_query.order_by(Invoice.created_at.desc()).limit(20).all()
         return jsonify({'invoices': [serialize_invoice(invoice) for invoice in invoices]})
 
     return app
