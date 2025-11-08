@@ -10,16 +10,19 @@
 
   <div id="container_login">
     <div class="decorative-line"></div>
-    <span id="Distrito">{{titlecontainer}}</span>
-    <span id="cinco">{{title2_container}}</span>
-    <h2>{{subtitle_container }}</h2>
-    <div id="container_input"> 
+    <span id="Distrito">{{ titlecontainer }}</span>
+    <span id="cinco">{{ title2_container }}</span>
+    <h2>{{ subtitle_container }}</h2>
+    {% if error %}
+    <div class="login-error">{{ error }}</div>
+    {% endif %}
+    <div id="container_input">
       <form id="login_form" method="post" action="{{ url_for('login') }}">
-      <span id="user_password">{{user}}</span>
-      <input type="text" id="username" name="username" placeholder="{{placeholder_user}}">
-      <span id="user_password">{{password}}</span>
-      <input type="password" id="password" name="password" placeholder="{{placeholder_password}}">
-      <button id="login_button" type="submit">{{button_login}}</button>
+      <span id="user_password">{{ user }}</span>
+      <input type="text" id="username" name="username" placeholder="{{ placeholder_user or '' }}" required>
+      <span id="user_password">{{ password }}</span>
+      <input type="password" id="password" name="password" placeholder="{{ placeholder_password or '' }}" required>
+      <button id="login_button" type="submit">{{ button_login }}</button>
       </form>
     </div>
   </div>
