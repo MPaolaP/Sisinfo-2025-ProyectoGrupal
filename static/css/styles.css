@@ -1662,7 +1662,43 @@ h2 .highlight {
 }
 
 .table-wrapper {
+    overflow: hidden;
+}
+
+.fixed-table-wrapper {
+    border-radius: 1rem;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    background: rgba(15, 23, 42, 0.55);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.table-scroll-container {
+    max-height: 420px;
+    min-height: 420px;
+    overflow-y: auto;
     overflow-x: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(132, 204, 22, 0.65) rgba(15, 23, 42, 0.6);
+}
+
+.table-scroll-container::-webkit-scrollbar {
+    width: 0.65rem;
+    height: 0.65rem;
+}
+
+.table-scroll-container::-webkit-scrollbar-track {
+    background: rgba(15, 23, 42, 0.6);
+    border-radius: 1rem;
+}
+
+.table-scroll-container::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, rgba(132, 204, 22, 0.85), rgba(34, 197, 94, 0.65));
+    border-radius: 1rem;
+    border: 2px solid rgba(15, 23, 42, 0.7);
+}
+
+.table-scroll-container::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, rgba(132, 204, 22, 1), rgba(34, 197, 94, 0.85));
 }
 
 #inventory_table {
@@ -1682,6 +1718,20 @@ h2 .highlight {
     font-size: 0.75rem;
     letter-spacing: 0.04em;
     color: var(--color-text-muted);
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: rgba(15, 23, 42, 0.92);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+#inventory_table thead th:first-child {
+    border-top-left-radius: 1rem;
+}
+
+#inventory_table thead th:last-child {
+    border-top-right-radius: 1rem;
 }
 
 #inventory_table tbody tr:hover {
@@ -1753,6 +1803,87 @@ h2 .highlight {
 .transfer-form {
     display: grid;
     gap: 1rem;
+}
+
+.form-toggle .toggle-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 600;
+    color: var(--color-text);
+}
+
+.form-toggle input[type="checkbox"] {
+    width: 1.1rem;
+    height: 1.1rem;
+    accent-color: var(--color-primary);
+}
+
+[data-existing-product-field].is-disabled {
+    opacity: 0.4;
+    pointer-events: none;
+}
+
+.product-details-card {
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 1rem;
+    padding: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.product-details-card h5 {
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0;
+    color: var(--color-text);
+}
+
+.details-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 0.75rem;
+}
+
+.details-grid > div {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.detail-label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+    letter-spacing: 0.05em;
+}
+
+.detail-value {
+    font-weight: 600;
+    color: var(--color-text);
+}
+
+.new-product-fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1rem;
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid rgba(132, 204, 22, 0.18);
+    border-radius: 1rem;
+    padding: 1.25rem;
+}
+
+.new-product-fields h4 {
+    grid-column: 1 / -1;
+    font-size: 1.05rem;
+    margin: 0 0 0.25rem;
+    color: var(--color-text);
+}
+
+.new-product-fields .form-field {
+    margin: 0;
 }
 
 .form-field.full-width {
@@ -2118,6 +2249,10 @@ h2 .highlight {
     animation: fadeIn 0.3s ease-in-out;
 }
 
+.modal[aria-hidden="false"] {
+    display: block;
+}
+
 @keyframes fadeIn {
     from { opacity: 0; }
     to { opacity: 1; }
@@ -2134,6 +2269,24 @@ h2 .highlight {
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
     animation: slideDown 0.3s ease-in-out;
     position: relative;
+}
+
+.modal-backdrop {
+    position: absolute;
+    inset: 0;
+}
+
+.modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.modal-form {
+    display: grid;
+    gap: 1rem;
 }
 
 @keyframes slideDown {
@@ -3029,7 +3182,17 @@ h2 .highlight {
 }
 
 .panel-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1.5rem;
     padding: 1.25rem 1.25rem 0.5rem;
+}
+
+.panel-title {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
 }
 
 .panel-header h3 {

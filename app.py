@@ -6,7 +6,8 @@ from Modelo.conexion import DevelopmentConfig
 from datetime import datetime, timedelta, date
 from sqlalchemy import func, or_, case
 from sqlalchemy.orm import aliased
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
+from sqlalchemy.exc import IntegrityError
 
 db = SQLAlchemy()
 login_manager = LoginManager()
@@ -196,10 +197,12 @@ class StockAlert(db.Model):
 
 
 # ======= HELPERS INVENTARIO =======
-def get_or_create_inventory(product_id, store_id):
+def get_or_create_inventory(product_id, store_id, default_min_stock=None):
     inventory = Inventory.query.filter_by(product_id=product_id, store_id=store_id).first()
     if not inventory:
         inventory = Inventory(product_id=product_id, store_id=store_id, quantity=0)
+        if default_min_stock is not None:
+            inventory.min_stock = default_min_stock
         db.session.add(inventory)
         db.session.flush()
     return inventory
@@ -238,8 +241,16 @@ def record_inventory_movement(product_id, store_id, quantity, movement_type, use
     return movement
 
 
-def adjust_inventory(product_id, store_id, quantity_delta, movement_type, user_id=None, notes=None):
-    inventory = get_or_create_inventory(product_id, store_id)
+def adjust_inventory(
+    product_id,
+    store_id,
+    quantity_delta,
+    movement_type,
+    user_id=None,
+    notes=None,
+    default_min_stock=None,
+):
+    inventory = get_or_create_inventory(product_id, store_id, default_min_stock=default_min_stock)
     new_quantity = (inventory.quantity or 0) + quantity_delta
     if new_quantity < 0:
         raise ValueError('El stock no puede ser negativo')
@@ -255,6 +266,20 @@ def adjust_inventory(product_id, store_id, quantity_delta, movement_type, user_i
     )
     update_stock_alerts(inventory)
     return inventory
+
+
+def get_or_create_category_by_name(name):
+    if not name:
+        return None
+    normalized = name.strip()
+    if not normalized:
+        return None
+    category = Category.query.filter(func.lower(Category.name) == normalized.lower()).first()
+    if not category:
+        category = Category(name=normalized)
+        db.session.add(category)
+        db.session.flush()
+    return category
 
 
 # ======= FECHAS =======
@@ -725,6 +750,7 @@ def create_app(config_class=DevelopmentConfig):
             Product.sku,
             Product.size,
             Product.color,
+            Product.price,
             Category.name.label('category_name'),
             Store.id.label('store_id'),
             Store.name.label('store_name'),
@@ -744,12 +770,19 @@ def create_app(config_class=DevelopmentConfig):
         colors = set()
         categories = set()
 
+        product_min_stock = {}
+
         for row in inventory_rows:
             total_units += int(row.quantity or 0)
             min_stock = row.min_stock or 0
             is_low = (row.quantity or 0) <= min_stock
             if is_low:
                 low_stock_count += 1
+
+            if row.product_id not in product_min_stock:
+                product_min_stock[row.product_id] = int(min_stock)
+            else:
+                product_min_stock[row.product_id] = min(product_min_stock[row.product_id], int(min_stock))
 
             if row.size:
                 sizes.add(row.size)
@@ -824,7 +857,9 @@ def create_app(config_class=DevelopmentConfig):
                     'sku': product.sku,
                     'size': product.size,
                     'color': product.color,
-                    'category': product.category.name if product.category else None
+                    'category': product.category.name if product.category else None,
+                    'price': float(product.price) if product.price is not None else None,
+                    'min_stock': product_min_stock.get(product.id)
                 }
                 for product in products
             ]
@@ -904,9 +939,22 @@ def create_app(config_class=DevelopmentConfig):
         quantity = data.get('quantity')
         movement_type = data.get('movement_type')
         notes = data.get('notes')
+        new_product_payload = data.get('new_product') if isinstance(data.get('new_product'), dict) else None
 
-        if not all([product_id, store_id, quantity, movement_type]):
+        is_new_product = bool(new_product_payload)
+
+        if not store_id or not quantity or not movement_type:
             return jsonify({'error': 'Información incompleta para registrar el movimiento'}), 400
+
+        if not is_new_product and not product_id:
+            return jsonify({'error': 'Debe seleccionar un producto existente'}), 400
+
+        if is_new_product:
+            new_product_payload = {key: (value or '').strip() if isinstance(value, str) else value for key, value in new_product_payload.items()}
+            new_product_name = new_product_payload.get('name', '')
+            new_product_sku = new_product_payload.get('sku', '')
+            if not new_product_name or not new_product_sku:
+                return jsonify({'error': 'El nombre y el SKU del nuevo producto son obligatorios'}), 400
 
         try:
             store_id = int(store_id)
@@ -923,7 +971,60 @@ def create_app(config_class=DevelopmentConfig):
         if movement_type not in ['entry', 'exit']:
             return jsonify({'error': 'Tipo de movimiento no soportado'}), 400
 
+        if is_new_product and movement_type != 'entry':
+            return jsonify({'error': 'Los nuevos productos solo pueden registrarse como entradas'}), 400
+
+        new_product_min_stock = None
+        if is_new_product:
+            try:
+                new_product_min_stock = new_product_payload.get('min_stock')
+                if new_product_min_stock in (None, ''):
+                    return jsonify({'error': 'Debe definir un stock mínimo para el nuevo producto'}), 400
+                new_product_min_stock = int(new_product_min_stock)
+                if new_product_min_stock < 0:
+                    raise ValueError
+            except (TypeError, ValueError):
+                return jsonify({'error': 'El stock mínimo del nuevo producto debe ser un número entero mayor o igual a cero'}), 400
+
+            price_value = new_product_payload.get('price')
+            product_price = None
+            if price_value not in (None, ''):
+                try:
+                    product_price = Decimal(str(price_value))
+                    if product_price < 0:
+                        raise InvalidOperation
+                except (InvalidOperation, ValueError):
+                    return jsonify({'error': 'El precio debe ser un número positivo'}), 400
+
+            category = get_or_create_category_by_name(new_product_payload.get('category'))
+
+            product = Product(
+                name=new_product_payload.get('name'),
+                sku=new_product_payload.get('sku'),
+                size=new_product_payload.get('size') or None,
+                color=new_product_payload.get('color') or None,
+                price=product_price,
+                category=category,
+            )
+            db.session.add(product)
+            try:
+                db.session.flush()
+            except IntegrityError:
+                db.session.rollback()
+                return jsonify({'error': 'El SKU proporcionado ya está registrado en otro producto'}), 400
+
+            product_id = product.id
+
+        product = Product.query.get(product_id)
+        if not product:
+            return jsonify({'error': 'El producto seleccionado no existe'}), 404
+
         quantity_delta = quantity if movement_type == 'entry' else -quantity
+
+        if movement_type == 'exit':
+            inventory_check = Inventory.query.filter_by(product_id=product_id, store_id=store_id).first()
+            if not inventory_check:
+                return jsonify({'error': 'El producto no tiene existencias registradas en la sucursal seleccionada'}), 400
 
         try:
             inventory = adjust_inventory(
@@ -932,12 +1033,17 @@ def create_app(config_class=DevelopmentConfig):
                 quantity_delta=quantity_delta,
                 movement_type='entry' if quantity_delta > 0 else 'exit',
                 user_id=current_user.id,
-                notes=notes
+                notes=notes,
+                default_min_stock=new_product_min_stock
             )
             db.session.commit()
         except ValueError as exc:
             db.session.rollback()
             return jsonify({'error': str(exc)}), 400
+        except IntegrityError as exc:
+            current_app.logger.exception("Error al ajustar inventario: %s", exc)
+            db.session.rollback()
+            return jsonify({'error': 'No fue posible registrar el movimiento'}), 400
 
         return jsonify({
             'success': True,
@@ -945,7 +1051,103 @@ def create_app(config_class=DevelopmentConfig):
                 'inventory_id': inventory.id,
                 'quantity': int(inventory.quantity),
                 'min_stock': int(inventory.min_stock or 0)
-            }
+            },
+            'product_id': product_id
+        })
+
+    @app.route('/api/inventory/products/<int:product_id>', methods=['PUT'])
+    @login_required
+    def update_inventory_product(product_id):
+        ensure_admin_access()
+        data = request.get_json() or {}
+
+        product = Product.query.get(product_id)
+        if not product:
+            return jsonify({'error': 'Producto no encontrado'}), 404
+
+        name = (data.get('name') or '').strip()
+        sku = (data.get('sku') or '').strip()
+        size = (data.get('size') or '').strip()
+        color = (data.get('color') or '').strip()
+        category_name = (data.get('category') or '').strip()
+        price_value = data.get('price')
+        min_stock_value = data.get('min_stock')
+
+        if not name or not sku:
+            return jsonify({'error': 'El nombre y el SKU son obligatorios'}), 400
+
+        if price_value not in (None, ''):
+            try:
+                price_decimal = Decimal(str(price_value))
+                if price_decimal < 0:
+                    raise InvalidOperation
+            except (InvalidOperation, ValueError):
+                return jsonify({'error': 'El precio debe ser un número positivo'}), 400
+        else:
+            price_decimal = None
+
+        if min_stock_value not in (None, ''):
+            try:
+                min_stock_int = int(min_stock_value)
+                if min_stock_int < 0:
+                    raise ValueError
+            except (TypeError, ValueError):
+                return jsonify({'error': 'El stock mínimo debe ser un número entero mayor o igual a cero'}), 400
+        else:
+            min_stock_int = None
+
+        existing_sku = (
+            Product.query.filter(Product.sku == sku, Product.id != product.id)
+            .with_entities(Product.id)
+            .first()
+        )
+        if existing_sku:
+            return jsonify({'error': 'El SKU ingresado ya está asociado a otro producto'}), 400
+
+        category = get_or_create_category_by_name(category_name)
+
+        product.name = name
+        product.sku = sku
+        product.size = size or None
+        product.color = color or None
+        product.price = price_decimal
+        product.category = category
+
+        try:
+            db.session.flush()
+        except IntegrityError:
+            db.session.rollback()
+            return jsonify({'error': 'No fue posible actualizar el producto'}), 400
+
+        inventories_updated = []
+        if min_stock_int is not None:
+            inventory_items = Inventory.query.filter_by(product_id=product.id).all()
+            for inventory_item in inventory_items:
+                inventory_item.min_stock = min_stock_int
+                update_stock_alerts(inventory_item)
+                inventories_updated.append(
+                    {
+                        'inventory_id': inventory_item.id,
+                        'store_id': inventory_item.store_id,
+                        'min_stock': int(inventory_item.min_stock or 0)
+                    }
+                )
+
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'product': {
+                'id': product.id,
+                'name': product.name,
+                'sku': product.sku,
+                'size': product.size,
+                'color': product.color,
+                'category': product.category.name if product.category else None,
+                'price': float(product.price) if product.price is not None else None
+            },
+            'inventories': inventories_updated,
+            'min_stock': min_stock_int
         })
 
     @app.route('/api/inventory/transfers', methods=['GET', 'POST'])
