@@ -685,7 +685,7 @@ def create_app(config_class=DevelopmentConfig):
 
         active_alerts_query = db.session.query(func.count(StockAlert.id)).join(
             Inventory, StockAlert.inventory_id == Inventory.id
-        ).filter(StockAlert.is_active.is_(True))
+        ).filter(StockAlert.is_active == True)
         active_alerts_query = apply_store_filter(active_alerts_query, Inventory.store_id)
         active_alerts = active_alerts_query.scalar() or 0
 
@@ -776,7 +776,7 @@ def create_app(config_class=DevelopmentConfig):
 
         active_alerts_query = db.session.query(func.count(StockAlert.id)).join(
             Inventory, StockAlert.inventory_id == Inventory.id
-        ).filter(StockAlert.is_active.is_(True))
+        ).filter(StockAlert.is_active ==True)
         active_alerts_query = apply_store_filter(active_alerts_query, Inventory.store_id)
         active_alerts = active_alerts_query.scalar() or 0
 
@@ -843,7 +843,7 @@ def create_app(config_class=DevelopmentConfig):
         ).join(Inventory, StockAlert.inventory_id == Inventory.id) \
          .join(Product, Inventory.product_id == Product.id) \
          .join(Store, Inventory.store_id == Store.id) \
-         .filter(StockAlert.is_active.is_(True)) \
+         .filter(StockAlert.is_active == True) \
          .order_by(StockAlert.created_at.desc())
 
         alerts_query = apply_store_filter(alerts_query, Store.id)
@@ -1157,7 +1157,7 @@ def create_app(config_class=DevelopmentConfig):
 
         stock_alerts_query = db.session.query(func.count(StockAlert.id)).join(
             Inventory, StockAlert.inventory_id == Inventory.id
-        ).filter(StockAlert.is_active.is_(True))
+        ).filter(StockAlert.is_active == True)
         stock_alerts_query = apply_store_filter(stock_alerts_query, Inventory.store_id)
         stock_alerts = stock_alerts_query.scalar() or 0
 
@@ -1204,28 +1204,43 @@ def create_app(config_class=DevelopmentConfig):
     @app.route('/api/dashboard/top-products', methods=['GET'])
     @login_required
     def get_top_products():
-        fecha_inicio_str = request.args.get('fecha_inicio')
-        fecha_fin_str = request.args.get('fecha_fin')
-        fecha_inicio, fecha_fin = get_date_range_filter(fecha_inicio_str, fecha_fin_str)
+        try:
+            fecha_inicio_str = request.args.get('fecha_inicio')
+            fecha_fin_str = request.args.get('fecha_fin')
+            fecha_inicio, fecha_fin = get_date_range_filter(fecha_inicio_str, fecha_fin_str)
 
-        query = db.session.query(
-            Product.name,
-            func.sum(Sale.quantity).label('total_quantity')
-        ).join(Sale, Sale.product_id == Product.id) \
-         .group_by(Product.id, Product.name) \
-         .order_by(func.sum(Sale.quantity).desc()) \
-         .limit(5)
+            # Construye la query SIN limit todavía
+            q = db.session.query(
+                Product.id.label('product_id'),
+                Product.name.label('product_name'),
+                func.coalesce(func.sum(Sale.quantity), 0).label('units_sold'),
+                func.coalesce(func.sum(Sale.total_amount), 0).label('total_amount')
+            ).join(Sale, Sale.product_id == Product.id) \
+            .group_by(Product.id, Product.name)
 
-        if current_user.user_type in [1, 2]:
-            query = query.filter(Sale.sale_date.between(fecha_inicio, fecha_fin))
+            # Filtros SIEMPRE antes del limit
+            if current_user.user_type in [1, 2]:
+                q = q.filter(Sale.sale_date >= fecha_inicio, Sale.sale_date <= fecha_fin)
 
-        query = apply_store_filter(query, Sale.store_id)
+            q = apply_store_filter(q, Sale.store_id)
 
-        results = query.all()
-        return jsonify([{
-            'name': r.name,
-            'quantity': int(r.total_quantity or 0)
-        } for r in results])
+            # Ordena y ahora sí limita
+            q = q.order_by(func.sum(Sale.quantity).desc()).limit(5)
+
+            rows = q.all()
+
+            return jsonify([
+                {
+                    'name': r.product_name,
+                    'quantity': int(r.units_sold or 0)
+                } for r in rows
+            ])
+
+        except Exception as exc:
+            current_app.logger.exception("Error en /api/dashboard/top-products: %s", exc)
+            return jsonify({'error': 'No fue posible obtener Top Productos'}), 500
+
+
 
     @app.route('/api/dashboard/stock-alerts', methods=['GET'])
     @login_required
@@ -1242,7 +1257,7 @@ def create_app(config_class=DevelopmentConfig):
         ).join(
             Store, Inventory.store_id == Store.id
         ).filter(
-            StockAlert.is_active.is_(True)
+            StockAlert.is_active == True
         )
 
         rows_query = apply_store_filter(rows_query, Store.id)
