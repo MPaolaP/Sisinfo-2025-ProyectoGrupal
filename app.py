@@ -14,13 +14,15 @@ from flask_login import LoginManager, UserMixin, login_user, logout_user, login_
 from werkzeug.security import generate_password_hash, check_password_hash
 from Modelo.conexion import DevelopmentConfig
 from datetime import datetime, timedelta, date
-from sqlalchemy import func, or_, case
+from collections import defaultdict
+from sqlalchemy import func, or_, case, extract
 from sqlalchemy.orm import aliased
 from decimal import Decimal, InvalidOperation
 from sqlalchemy.exc import IntegrityError
 import csv
 import io
 import json
+from sqlalchemy import cast, Date, func
 
 db = SQLAlchemy()
 login_manager = LoginManager()
@@ -488,6 +490,86 @@ def create_app(config_class=DevelopmentConfig):
             return query.filter(column.in_([-1]))
         return query.filter(column.in_(store_ids))
 
+    def apply_store_selection_filter(query, column):
+        query = apply_store_filter(query, column)
+        store_id = request.args.get('store_id', type=int)
+        if store_id:
+            ensure_store_permission(store_id)
+            query = query.filter(column == store_id)
+        return query
+
+    def apply_category_filter(query, column):
+        category_id = request.args.get('category_id', type=int)
+        if category_id:
+            query = query.filter(column == category_id)
+        return query
+
+    def resolve_period_range(default_days=0):
+        period = request.args.get('period', 'today')
+        custom_start = request.args.get('start_date')
+        custom_end = request.args.get('end_date')
+
+        today = date.today()
+        now = datetime.utcnow()
+
+        def normalize_day_range(target_date):
+            return (
+                datetime.combine(target_date, datetime.min.time()),
+                datetime.combine(target_date, datetime.max.time()),
+            )
+
+        if period == 'week':
+            end_date = datetime.combine(today, datetime.max.time())
+            start_date = end_date - timedelta(days=6)
+            prev_end = start_date - timedelta(seconds=1)
+            prev_start = prev_end - timedelta(days=6)
+        elif period == 'month':
+            end_date = datetime.combine(today, datetime.max.time())
+            start_date = end_date - timedelta(days=29)
+            prev_end = start_date - timedelta(seconds=1)
+            prev_start = prev_end - timedelta(days=29)
+        elif period == 'quarter':
+            end_date = datetime.combine(today, datetime.max.time())
+            start_date = end_date - timedelta(days=89)
+            prev_end = start_date - timedelta(seconds=1)
+            prev_start = prev_end - timedelta(days=89)
+        elif period == 'custom' and custom_start and custom_end:
+            try:
+                start_date = datetime.strptime(custom_start, '%Y-%m-%d')
+                start_date = datetime.combine(start_date.date(), datetime.min.time())
+                end_date = datetime.strptime(custom_end, '%Y-%m-%d')
+                end_date = datetime.combine(end_date.date(), datetime.max.time())
+                duration = max((end_date - start_date).days, 1)
+                prev_end = start_date - timedelta(seconds=1)
+                prev_start = prev_end - timedelta(days=duration)
+            except ValueError:
+                start_date, end_date = normalize_day_range(today)
+                prev_start, prev_end = normalize_day_range(today - timedelta(days=1))
+        else:
+            reference_date = today if period == 'today' else now.date()
+            start_date, end_date = normalize_day_range(reference_date)
+            prev_start, prev_end = normalize_day_range(reference_date - timedelta(days=1))
+
+        return start_date, end_date, prev_start, prev_end
+
+    def clamp_range_to_period(start_date, end_date, target_days):
+        if target_days <= 0:
+            return start_date, end_date
+        adjusted_start = end_date - timedelta(days=target_days - 1)
+        if adjusted_start < start_date:
+            adjusted_start = start_date
+        return adjusted_start, end_date
+
+    def apply_date_range_filter(query, column, start_date, end_date):
+        return query.filter(column >= start_date, column <= end_date)
+
+    def decimal_to_float(value):
+        if value is None:
+            return 0.0
+        if isinstance(value, Decimal):
+            return float(value)
+        return float(value)
+
     def ensure_store_permission(store_id):
         store_ids = get_accessible_store_ids()
         if store_ids is None:
@@ -689,10 +771,18 @@ def create_app(config_class=DevelopmentConfig):
     @login_required
     def reports():
         ensure_management_access()
+        stores_query = Store.query.filter_by(active=True)
+        store_ids = get_accessible_store_ids()
+        if store_ids is not None:
+            stores_query = stores_query.filter(Store.id.in_(store_ids))
+        stores = stores_query.order_by(Store.name).all()
+        categories = Category.query.order_by(Category.name).all()
         return render_template(
             'reports.html',
             username=current_user.username,
-            user_type=current_user.user_type
+            user_type=current_user.user_type,
+            stores=stores,
+            categories=categories
         )
 
     @app.route('/manage_users')
@@ -842,171 +932,719 @@ def create_app(config_class=DevelopmentConfig):
                                user_type=current_user.user_type)
 
     # ======= API REPORTES =======
-    @app.route('/api/reports/inventory-overview', methods=['GET'])
+    @app.route('/api/reports/dashboard-overview', methods=['GET'])
     @login_required
-    def reports_inventory_overview():
+    def reports_dashboard_overview():
         ensure_management_access()
 
+        period_start, period_end, prev_period_start, prev_period_end = resolve_period_range()
+        category_id = request.args.get('category_id', type=int)
+
+        def sales_total(range_start, range_end):
+            query = db.session.query(func.coalesce(func.sum(Sale.total_amount), 0)).select_from(Sale)
+            query = query.join(Product, Sale.product_id == Product.id)
+            query = apply_store_selection_filter(query, Sale.store_id)
+            query = apply_date_range_filter(query, Sale.sale_date, range_start, range_end)
+            if category_id:
+                query = query.filter(Product.category_id == category_id)
+            return query.scalar() or Decimal('0')
+
+        def invoice_totals(range_start, range_end):
+            query = db.session.query(
+                func.count(func.distinct(Invoice.id)).label('invoice_count'),
+                func.coalesce(func.sum(InvoiceItem.line_total), 0).label('amount')
+            ).select_from(Invoice) \
+             .join(InvoiceItem, InvoiceItem.invoice_id == Invoice.id) \
+             .join(Product, InvoiceItem.product_id == Product.id)
+            query = apply_store_selection_filter(query, Invoice.store_id)
+            query = apply_date_range_filter(query, Invoice.created_at, range_start, range_end)
+            if category_id:
+                query = query.filter(Product.category_id == category_id)
+            result = query.one()
+            invoice_count = result.invoice_count or 0
+            amount = result.amount or Decimal('0')
+            return invoice_count, amount
+
+        daily_start = datetime.combine(period_end.date(), datetime.min.time())
+        daily_end = datetime.combine(period_end.date(), datetime.max.time())
+        if daily_start < period_start:
+            daily_start = period_start
+        if daily_end > period_end:
+            daily_end = period_end
+        prev_daily_start = daily_start - timedelta(days=1)
+        prev_daily_end = daily_end - timedelta(days=1)
+
+        weekly_start, weekly_end = clamp_range_to_period(period_start, period_end, 7)
+        prev_week_end = weekly_start - timedelta(seconds=1)
+        prev_week_start = prev_week_end - timedelta(days=6)
+
+        monthly_start, monthly_end = clamp_range_to_period(period_start, period_end, 30)
+        prev_month_end = monthly_start - timedelta(seconds=1)
+        prev_month_start = prev_month_end - timedelta(days=29)
+
+        daily_total = sales_total(daily_start, daily_end)
+        prev_daily_total = sales_total(prev_daily_start, prev_daily_end)
+
+        weekly_total = sales_total(weekly_start, weekly_end)
+        prev_weekly_total = sales_total(prev_week_start, prev_week_end)
+
+        monthly_total = sales_total(monthly_start, monthly_end)
+        prev_monthly_total = sales_total(prev_month_start, prev_month_end)
+
+        invoice_count, invoice_amount = invoice_totals(period_start, period_end)
+        prev_invoice_count, prev_invoice_amount = invoice_totals(prev_period_start, prev_period_end)
+
+        avg_ticket = (invoice_amount / invoice_count) if invoice_count else Decimal('0')
+        prev_avg_ticket = (prev_invoice_amount / prev_invoice_count) if prev_invoice_count else Decimal('0')
+
+        def compute_trend(current_value, previous_value):
+            current_float = decimal_to_float(current_value)
+            previous_float = decimal_to_float(previous_value)
+            if previous_float == 0:
+                if current_float == 0:
+                    return {'direction': 'flat', 'percentage': 0.0}
+                return {'direction': 'up', 'percentage': 100.0}
+            change = ((current_float - previous_float) / previous_float) * 100
+            direction = 'up' if change > 1 else 'down' if change < -1 else 'flat'
+            return {'direction': direction, 'percentage': round(change, 2)}
+
+        kpis = [
+            {
+                'key': 'daily_revenue',
+                'label': 'Facturación diaria',
+                'icon': 'fa-cash-register',
+                'value': decimal_to_float(daily_total),
+                'trend': compute_trend(daily_total, prev_daily_total),
+                'tooltip': 'Valor total de ventas registradas durante el último día dentro del periodo seleccionado.'
+            },
+            {
+                'key': 'weekly_revenue',
+                'label': 'Facturación semanal',
+                'icon': 'fa-calendar-week',
+                'value': decimal_to_float(weekly_total),
+                'trend': compute_trend(weekly_total, prev_weekly_total),
+                'tooltip': 'Ingresos acumulados en los últimos 7 días, ajustados al filtro aplicado.'
+            },
+            {
+                'key': 'monthly_revenue',
+                'label': 'Facturación mensual',
+                'icon': 'fa-chart-line',
+                'value': decimal_to_float(monthly_total),
+                'trend': compute_trend(monthly_total, prev_monthly_total),
+                'tooltip': 'Ingresos consolidados de los últimos 30 días dentro del rango analizado.'
+            },
+            {
+                'key': 'avg_ticket',
+                'label': 'Ticket promedio',
+                'icon': 'fa-receipt',
+                'value': decimal_to_float(avg_ticket),
+                'trend': compute_trend(avg_ticket, prev_avg_ticket),
+                'tooltip': 'Valor promedio facturado por comprobante emitido en el periodo.'
+            }
+        ]
+
+        response = {
+            'last_updated': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+            'auto_refresh_interval': 300,
+            'period': {
+                'start': period_start.isoformat(),
+                'end': period_end.isoformat(),
+                'previous_start': prev_period_start.isoformat(),
+                'previous_end': prev_period_end.isoformat()
+            },
+            'kpis': kpis
+        }
+
+        return jsonify(response)
+
+    @app.route('/api/reports/inventory-insights', methods=['GET'])
+    @login_required
+    def reports_inventory_insights():
+        ensure_management_access()
+
+        category_id = request.args.get('category_id', type=int)
+
         alert_case = case((func.coalesce(Inventory.quantity, 0) <= func.coalesce(Inventory.min_stock, 0), 1), else_=0)
-        store_totals_query = db.session.query(
+        base_query = db.session.query(
             Store.id.label('store_id'),
             Store.name.label('store_name'),
             func.coalesce(func.sum(Inventory.quantity), 0).label('units'),
             func.coalesce(func.sum(alert_case), 0).label('alerts')
-        ).outerjoin(Inventory, Inventory.store_id == Store.id) \
-         .group_by(Store.id, Store.name) \
-         .order_by(Store.name)
+        ).select_from(Store) \
+         .outerjoin(Inventory, Inventory.store_id == Store.id) \
+         .outerjoin(Product, Inventory.product_id == Product.id) \
+         .outerjoin(Category, Product.category_id == Category.id)
 
-        store_totals_query = apply_store_filter(store_totals_query, Store.id)
-        store_totals = store_totals_query.all()
+        base_query = apply_store_selection_filter(base_query, Store.id)
+        if category_id:
+            base_query = base_query.filter(Category.id == category_id)
 
-        total_units = sum(int(row.units or 0) for row in store_totals)
-        total_alerts = sum(int(row.alerts or 0) for row in store_totals)
+        base_query = base_query.group_by(Store.id, Store.name).order_by(Store.name)
+        store_rows = base_query.all()
 
-        return jsonify({
-            'last_updated': datetime.utcnow().strftime('%Y-%m-%d %H:%M'),
-            'total_units': total_units,
-            'total_alerts': total_alerts,
+        total_units = sum(int(row.units or 0) for row in store_rows)
+        total_alerts = sum(int(row.alerts or 0) for row in store_rows)
+
+        detail_query = db.session.query(
+            Store.id.label('store_id'),
+            Product.id.label('product_id'),
+            Product.name.label('product_name'),
+            Product.sku.label('sku'),
+            Product.color.label('color'),
+            Product.size.label('size'),
+            Category.name.label('category_name'),
+            func.coalesce(Inventory.quantity, 0).label('quantity'),
+            func.coalesce(Inventory.min_stock, 0).label('min_stock')
+        ).select_from(Inventory) \
+         .join(Store, Inventory.store_id == Store.id) \
+         .join(Product, Inventory.product_id == Product.id) \
+         .outerjoin(Category, Product.category_id == Category.id)
+
+        detail_query = apply_store_selection_filter(detail_query, Inventory.store_id)
+        if category_id:
+            detail_query = detail_query.filter(Category.id == category_id)
+
+        detail_rows = detail_query.order_by(Store.name, func.lower(Product.name)).all()
+
+        store_details = defaultdict(list)
+        for row in detail_rows:
+            store_details[row.store_id].append({
+                'product_id': row.product_id,
+                'product_name': row.product_name,
+                'sku': row.sku,
+                'color': row.color,
+                'size': row.size,
+                'category_name': row.category_name or 'Sin categoría',
+                'quantity': int(row.quantity or 0),
+                'min_stock': int(row.min_stock or 0),
+                'is_alert': int(row.quantity or 0) <= int(row.min_stock or 0)
+            })
+
+        response = {
+            'last_updated': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+            'totals': {
+                'units': total_units,
+                'alerts': total_alerts,
+                'alert_rate': round((total_alerts / total_units) * 100, 2) if total_units else 0
+            },
             'stores': [
                 {
                     'store_id': row.store_id,
                     'store_name': row.store_name,
                     'units': int(row.units or 0),
-                    'alerts': int(row.alerts or 0)
+                    'alerts': int(row.alerts or 0),
+                    'alert_rate': round((int(row.alerts or 0) / int(row.units or 1)) * 100, 2) if int(row.units or 0) else 0,
+                    'products': store_details.get(row.store_id, [])
                 }
-                for row in store_totals
+                for row in store_rows
             ]
-        })
+        }
 
-    @app.route('/api/reports/top-products', methods=['GET'])
+        return jsonify(response)
+
+    @app.route('/api/reports/top-products-insights', methods=['GET'])
     @login_required
-    def reports_top_products():
+    def reports_top_products_insights():
         ensure_management_access()
 
-        top_products_query = db.session.query(
-            Product.id.label('product_id'),
-            Product.name.label('product_name'),
-            func.coalesce(func.sum(Sale.quantity), 0).label('units_sold'),
-            func.coalesce(func.sum(Sale.total_amount), 0).label('total_amount')
-        ).join(Product, Sale.product_id == Product.id) \
-         .group_by(Product.id, Product.name) \
-         .order_by(func.sum(Sale.quantity).desc())
+        metric = request.args.get('metric', 'units')
+        period_start, period_end, prev_start, prev_end = resolve_period_range()
+        category_id = request.args.get('category_id', type=int)
 
-        top_products_query = apply_store_filter(top_products_query, Sale.store_id)
-        top_products = top_products_query.limit(5).all()
+        def build_sales_query(range_start, range_end):
+            query = db.session.query(
+                Product.id.label('product_id'),
+                Product.name.label('product_name'),
+                func.coalesce(func.sum(Sale.quantity), 0).label('units'),
+                func.coalesce(func.sum(Sale.total_amount), 0).label('revenue')
+            ).select_from(Sale) \
+             .join(Product, Sale.product_id == Product.id)
+            query = apply_store_selection_filter(query, Sale.store_id)
+            query = apply_date_range_filter(query, Sale.sale_date, range_start, range_end)
+            if category_id:
+                query = query.filter(Product.category_id == category_id)
+            return query.group_by(Product.id, Product.name)
 
-        return jsonify({
-            'products': [
+        current_rows = build_sales_query(period_start, period_end).all()
+        previous_rows = build_sales_query(prev_start, prev_end).all()
+
+        previous_map = {row.product_id: row for row in previous_rows}
+
+        if metric not in {'units', 'revenue'}:
+            metric = 'units'
+
+        sorted_rows = sorted(
+            current_rows,
+            key=lambda row: (row.revenue if metric == 'revenue' else row.units),
+            reverse=True
+        )
+
+        top_rows = sorted_rows[:10]
+        total_units = sum(int(row.units or 0) for row in current_rows)
+        total_revenue = sum(decimal_to_float(row.revenue or 0) for row in current_rows)
+
+        sale_day = cast(Sale.sale_date, Date).label('sale_day')
+        history_query = db.session.query(
+            Sale.product_id,
+            sale_day,
+            func.coalesce(func.sum(Sale.quantity), 0).label('units'),
+            func.coalesce(func.sum(Sale.total_amount), 0).label('revenue')
+        ).select_from(Sale) \
+         .join(Product, Sale.product_id == Product.id)
+        history_query = apply_store_selection_filter(history_query, Sale.store_id)
+        history_query = apply_date_range_filter(history_query, Sale.sale_date, period_start, period_end)
+        if category_id:
+            history_query = history_query.filter(Product.category_id == category_id)
+        history_query = history_query.group_by(Sale.product_id, sale_day)
+        history_rows = history_query.all()
+
+        history_map = defaultdict(list)
+        for row in history_rows:
+            day_value = row.sale_day
+            day_label = day_value.isoformat() if hasattr(day_value, 'isoformat') else str(day_value)
+            history_map[row.product_id].append({
+                'date': day_label,
+                'units': int(row.units or 0),
+                'revenue': decimal_to_float(row.revenue or 0)
+            })
+
+        response = {
+            'metric': metric,
+            'totals': {
+                'units': total_units,
+                'revenue': total_revenue
+            },
+            'products': [],
+            'distribution': {
+                'labels': [],
+                'values': []
+            }
+        }
+
+        for row in top_rows:
+            previous_row = previous_map.get(row.product_id)
+            previous_metric_value = 0
+            current_metric_value = decimal_to_float(row.revenue) if metric == 'revenue' else int(row.units or 0)
+            if previous_row:
+                previous_metric_value = decimal_to_float(previous_row.revenue) if metric == 'revenue' else int(previous_row.units or 0)
+            trend = 0.0
+            if previous_metric_value:
+                trend = round(((current_metric_value - previous_metric_value) / previous_metric_value) * 100, 2)
+            elif current_metric_value:
+                trend = 100.0
+
+            response['products'].append({
+                'product_id': row.product_id,
+                'product_name': row.product_name,
+                'units': int(row.units or 0),
+                'revenue': decimal_to_float(row.revenue or 0),
+                'history': history_map.get(row.product_id, []),
+                'trend_percentage': trend
+            })
+            response['distribution']['labels'].append(row.product_name)
+            response['distribution']['values'].append(decimal_to_float(row.revenue or 0))
+
+        return jsonify(response)
+
+    @app.route('/api/reports/financial-advanced', methods=['GET'])
+    @login_required
+    def reports_financial_advanced():
+        ensure_management_access()
+
+        period_start, period_end, prev_start, prev_end = resolve_period_range()
+        category_id = request.args.get('category_id', type=int)
+        margin_ratio = Decimal('0.35')
+
+        base_invoice_query = db.session.query(
+            Invoice.id.label('invoice_id'),
+            Invoice.customer_id.label('customer_id'),
+            Invoice.created_at.label('created_at'),
+            func.coalesce(func.sum(InvoiceItem.line_total), 0).label('amount')
+        ).select_from(Invoice) \
+         .join(InvoiceItem, InvoiceItem.invoice_id == Invoice.id) \
+         .join(Product, InvoiceItem.product_id == Product.id)
+
+        base_invoice_query = apply_store_selection_filter(base_invoice_query, Invoice.store_id)
+        if category_id:
+            base_invoice_query = base_invoice_query.filter(Product.category_id == category_id)
+
+        current_invoices = base_invoice_query \
+            .filter(Invoice.created_at >= period_start, Invoice.created_at <= period_end) \
+            .group_by(Invoice.id, Invoice.customer_id, Invoice.created_at) \
+            .all()
+
+        previous_invoices = base_invoice_query \
+            .filter(Invoice.created_at >= prev_start, Invoice.created_at <= prev_end) \
+            .group_by(Invoice.id, Invoice.customer_id, Invoice.created_at) \
+            .all()
+
+        def aggregate_invoices(rows):
+            total_amount = Decimal('0')
+            unique_customers = set()
+            invoices_per_customer = defaultdict(list)
+            daily_totals = defaultdict(lambda: Decimal('0'))
+            for row in rows:
+                total_amount += row.amount or Decimal('0')
+                if row.customer_id:
+                    unique_customers.add(row.customer_id)
+                    invoices_per_customer[row.customer_id].append(row)
+                day = row.created_at.date()
+                daily_totals[day] += row.amount or Decimal('0')
+            return total_amount, unique_customers, invoices_per_customer, daily_totals
+
+        current_total, current_customers, current_invoices_map, current_daily = aggregate_invoices(current_invoices)
+        previous_total, _, _, _ = aggregate_invoices(previous_invoices)
+
+        avg_ticket = (current_total / len(current_invoices)) if current_invoices else Decimal('0')
+        prev_avg_ticket = (previous_total / len(previous_invoices)) if previous_invoices else Decimal('0')
+
+        margin_current = current_total * margin_ratio
+        margin_previous = previous_total * margin_ratio
+
+        customer_history_query = base_invoice_query \
+            .group_by(Invoice.id, Invoice.customer_id, Invoice.created_at)
+        customer_history_rows = customer_history_query.all()
+
+        customer_first_purchase = {}
+        for row in customer_history_rows:
+            if row.customer_id is None:
+                continue
+            first_purchase = customer_first_purchase.get(row.customer_id)
+            if not first_purchase or row.created_at < first_purchase:
+                customer_first_purchase[row.customer_id] = row.created_at
+
+        new_customers = 0
+        recurring_customers = 0
+        new_revenue = Decimal('0')
+        recurring_revenue = Decimal('0')
+
+        for customer_id, invoices in current_invoices_map.items():
+            first_purchase = customer_first_purchase.get(customer_id)
+            customer_amount = sum((invoice.amount or Decimal('0')) for invoice in invoices)
+            if first_purchase and first_purchase >= period_start:
+                new_customers += 1
+                new_revenue += customer_amount
+            else:
+                recurring_customers += 1
+                recurring_revenue += customer_amount
+
+        def compute_change(current_value, previous_value):
+            current_float = decimal_to_float(current_value)
+            previous_float = decimal_to_float(previous_value)
+            if previous_float == 0:
+                if current_float == 0:
+                    return 0.0
+                return 100.0
+            return round(((current_float - previous_float) / previous_float) * 100, 2)
+
+        def resolve_status(change):
+            if change >= 5:
+                return 'success'
+            if change <= -5:
+                return 'danger'
+            return 'warning'
+
+        def build_sparkline(daily_map):
+            monthly_totals = defaultdict(lambda: Decimal('0'))
+            for day, value in daily_map.items():
+                month_key = day.replace(day=1)
+                monthly_totals[month_key] += value
+            series = []
+            for month in sorted(monthly_totals.keys()):
+                label = month.strftime('%b %Y')
+                series.append({'label': label, 'value': decimal_to_float(monthly_totals[month])})
+            return series[-12:]
+
+        revenue_change = compute_change(current_total, previous_total)
+        margin_change = compute_change(margin_current, margin_previous)
+        ticket_change = compute_change(avg_ticket, prev_avg_ticket)
+
+        indicators = [
+            {
+                'label': 'Ingresos netos',
+                'value': decimal_to_float(current_total),
+                'change_percentage': revenue_change,
+                'status': resolve_status(revenue_change),
+                'sparkline': build_sparkline(current_daily)
+            },
+            {
+                'label': 'Margen estimado',
+                'value': decimal_to_float(margin_current),
+                'change_percentage': margin_change,
+                'status': resolve_status(margin_change),
+                'sparkline': build_sparkline({day: amount * margin_ratio for day, amount in current_daily.items()})
+            },
+            {
+                'label': 'Ticket promedio',
+                'value': decimal_to_float(avg_ticket),
+                'change_percentage': ticket_change,
+                'status': resolve_status(ticket_change),
+                'sparkline': build_sparkline(current_daily)
+            }
+        ]
+
+        total_customers = len(current_customers)
+        breakdown_total = max(total_customers, 1)
+
+        response = {
+            'indicators': indicators,
+            'customers': {
+                'new': {
+                    'count': new_customers,
+                    'revenue': decimal_to_float(new_revenue),
+                    'percentage': round((new_customers / breakdown_total) * 100, 2)
+                },
+                'recurring': {
+                    'count': recurring_customers,
+                    'revenue': decimal_to_float(recurring_revenue),
+                    'percentage': round((recurring_customers / breakdown_total) * 100, 2)
+                }
+            },
+            'totals': {
+                'invoices': len(current_invoices),
+                'customers': total_customers,
+                'revenue': decimal_to_float(current_total)
+            }
+        }
+
+        return jsonify(response)
+
+    @app.route('/api/reports/sales-heatmap', methods=['GET'])
+    @login_required
+    def reports_sales_heatmap():
+        ensure_management_access()
+
+        period_start, period_end, _, _ = resolve_period_range()
+        category_id = request.args.get('category_id', type=int)
+
+        sales_query = db.session.query(
+            Sale.store_id,
+            Sale.sale_date,
+            func.coalesce(Sale.total_amount, 0).label('amount')
+        ).select_from(Sale) \
+         .join(Product, Sale.product_id == Product.id)
+
+        sales_query = apply_store_selection_filter(sales_query, Sale.store_id)
+        sales_query = apply_date_range_filter(sales_query, Sale.sale_date, period_start, period_end)
+        if category_id:
+            sales_query = sales_query.filter(Product.category_id == category_id)
+
+        sales_rows = sales_query.all()
+
+        heatmap = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
+        totals_per_store = defaultdict(float)
+
+        for row in sales_rows:
+            sale_date = row.sale_date
+            if not sale_date:
+                continue
+            weekday = sale_date.weekday()
+            hour = sale_date.hour
+            amount = decimal_to_float(row.amount or 0)
+            heatmap[row.store_id][weekday][hour] += amount
+            totals_per_store[row.store_id] += amount
+
+        day_labels = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo']
+        hour_labels = [f'{str(hour).zfill(2)}:00' for hour in range(24)]
+
+        series = []
+        peak_windows = []
+
+        for store_id, days in heatmap.items():
+            store_series = []
+            for day_index, day_label in enumerate(day_labels):
+                data_points = []
+                for hour_index in range(24):
+                    amount = round(days.get(day_index, {}).get(hour_index, 0.0), 2)
+                    data_points.append({'x': hour_labels[hour_index], 'y': amount})
+                    if amount:
+                        peak_windows.append({
+                            'store_id': store_id,
+                            'day': day_label,
+                            'hour': hour_labels[hour_index],
+                            'amount': amount
+                        })
+                store_series.append({
+                    'name': day_label,
+                    'data': data_points
+                })
+            series.append({
+                'store_id': store_id,
+                'series': store_series
+            })
+
+        peak_windows = sorted(peak_windows, key=lambda item: item['amount'], reverse=True)[:10]
+
+        store_ids = list(heatmap.keys())
+        stores_info = {}
+        if store_ids:
+            stores = Store.query.filter(Store.id.in_(store_ids)).all()
+            stores_info = {store.id: store.name for store in stores}
+
+        response = {
+            'days': day_labels,
+            'hours': hour_labels,
+            'series': series,
+            'peaks': peak_windows,
+            'store_totals': [
                 {
-                    'product_id': row.product_id,
-                    'product_name': row.product_name,
-                    'units_sold': int(row.units_sold or 0),
-                    'total_amount': float(row.total_amount or 0)
+                    'store_id': store_id,
+                    'store_name': stores_info.get(store_id, 'Sucursal'),
+                    'amount': round(total, 2)
                 }
-                for row in top_products
+                for store_id, total in totals_per_store.items()
             ]
-        })
+        }
 
-    @app.route('/api/reports/sales-kpis', methods=['GET'])
+        return jsonify(response)
+
+    @app.route('/api/reports/category-analysis', methods=['GET'])
     @login_required
-    def reports_sales_kpis():
+    def reports_category_analysis():
         ensure_management_access()
 
-        now = datetime.utcnow()
-        today_start = datetime.combine(date.today(), datetime.min.time())
-        today_end = datetime.combine(date.today(), datetime.max.time())
-        week_start = today_start - timedelta(days=6)
-        month_start = today_start - timedelta(days=29)
+        period_start, period_end, _, _ = resolve_period_range()
+        category_id = request.args.get('category_id', type=int)
 
-        daily_query = db.session.query(func.coalesce(func.sum(Sale.total_amount), 0)).filter(
-            Sale.sale_date >= today_start,
-            Sale.sale_date <= today_end
-        )
-        daily_query = apply_store_filter(daily_query, Sale.store_id)
-        daily_total = daily_query.scalar() or Decimal('0')
+        sales_query = db.session.query(
+            Category.id.label('category_id'),
+            Category.name.label('category_name'),
+            func.coalesce(func.sum(Sale.quantity), 0).label('units'),
+            func.coalesce(func.sum(Sale.total_amount), 0).label('revenue')
+        ).select_from(Sale) \
+         .join(Product, Sale.product_id == Product.id) \
+         .outerjoin(Category, Product.category_id == Category.id)
 
-        weekly_query = db.session.query(func.coalesce(func.sum(Sale.total_amount), 0)).filter(
-            Sale.sale_date >= week_start,
-            Sale.sale_date <= now
-        )
-        weekly_query = apply_store_filter(weekly_query, Sale.store_id)
-        weekly_total = weekly_query.scalar() or Decimal('0')
+        sales_query = apply_store_selection_filter(sales_query, Sale.store_id)
+        sales_query = apply_date_range_filter(sales_query, Sale.sale_date, period_start, period_end)
+        if category_id:
+            sales_query = sales_query.filter(Category.id == category_id)
 
-        monthly_query = db.session.query(func.coalesce(func.sum(Sale.total_amount), 0)).filter(
-            Sale.sale_date >= month_start,
-            Sale.sale_date <= now
-        )
-        monthly_query = apply_store_filter(monthly_query, Sale.store_id)
-        monthly_total = monthly_query.scalar() or Decimal('0')
+        sales_query = sales_query.group_by(Category.id, Category.name)
+        sales_rows = sales_query.all()
 
-        invoice_stats_query = db.session.query(
-            func.count(Invoice.id),
-            func.coalesce(func.sum(Invoice.total_amount), 0)
-        ).filter(
-            Invoice.created_at >= month_start,
-            Invoice.created_at <= now
-        )
-        invoice_stats_query = apply_store_filter(invoice_stats_query, Invoice.store_id)
-        invoice_stats = invoice_stats_query.one()
+        inventory_query = db.session.query(
+            Category.id.label('category_id'),
+            func.coalesce(func.sum(Inventory.quantity), 0).label('inventory_units'),
+            func.coalesce(func.sum(Inventory.min_stock), 0).label('inventory_min')
+        ).select_from(Inventory) \
+         .join(Product, Inventory.product_id == Product.id) \
+         .outerjoin(Category, Product.category_id == Category.id)
 
-        invoice_count = invoice_stats[0] or 0
-        invoice_total = invoice_stats[1] or Decimal('0')
-        avg_ticket = (invoice_total / invoice_count) if invoice_count else Decimal('0')
+        inventory_query = apply_store_selection_filter(inventory_query, Inventory.store_id)
+        if category_id:
+            inventory_query = inventory_query.filter(Category.id == category_id)
+        inventory_query = inventory_query.group_by(Category.id)
+        inventory_rows = inventory_query.all()
+        inventory_map = {row.category_id: row for row in inventory_rows}
 
-        return jsonify({
-            'daily': float(daily_total),
-            'weekly': float(weekly_total),
-            'monthly': float(monthly_total),
-            'avg_ticket': float(avg_ticket)
-        })
+        margin_ratio = Decimal('0.35')
 
-    @app.route('/api/reports/financial-indicators', methods=['GET'])
-    @login_required
-    def reports_financial_indicators():
-        ensure_management_access()
+        composition = []
+        rotation = []
+        margins = []
 
-        total_revenue_query = db.session.query(func.coalesce(func.sum(Invoice.total_amount), 0))
-        total_revenue_query = apply_store_filter(total_revenue_query, Invoice.store_id)
-        total_revenue = total_revenue_query.scalar() or Decimal('0')
+        total_revenue = 0.0
+        total_units = 0
 
-        active_customers_query = db.session.query(func.count(func.distinct(Invoice.customer_id))).filter(
-            Invoice.customer_id.isnot(None)
-        )
-        active_customers_query = apply_store_filter(active_customers_query, Invoice.store_id)
-        active_customers = active_customers_query.scalar() or 0
+        for row in sales_rows:
+            category_key = row.category_id or 0
+            category_name = row.category_name or 'Sin categoría'
+            revenue = decimal_to_float(row.revenue or 0)
+            units = int(row.units or 0)
+            total_revenue += revenue
+            total_units += units
 
-        open_sessions_query = db.session.query(func.count(POSSession.id)).filter(POSSession.status == 'open')
-        open_sessions_query = apply_store_filter(open_sessions_query, POSSession.store_id)
-        open_sessions = open_sessions_query.scalar() or 0
+            inventory_row = inventory_map.get(row.category_id)
+            inventory_units = int(inventory_row.inventory_units or 0) if inventory_row else 0
+            inventory_min = int(inventory_row.inventory_min or 0) if inventory_row else 0
+            turnover = round(units / inventory_units, 2) if inventory_units else 0
+            margin_value = round(revenue * float(margin_ratio), 2)
 
-        active_alerts_query = db.session.query(func.count(StockAlert.id)).join(
-            Inventory, StockAlert.inventory_id == Inventory.id
-        ).filter(StockAlert.is_active == True)
-        active_alerts_query = apply_store_filter(active_alerts_query, Inventory.store_id)
-        active_alerts = active_alerts_query.scalar() or 0
+            composition.append({
+                'x': category_name,
+                'y': round(revenue, 2)
+            })
+            rotation.append({
+                'category_id': category_key,
+                'category_name': category_name,
+                'units_sold': units,
+                'inventory_units': inventory_units,
+                'turnover': turnover,
+                'min_stock': inventory_min
+            })
+            margins.append({
+                'category_id': category_key,
+                'category_name': category_name,
+                'margin': margin_value
+            })
 
-        return jsonify({
-            'indicators': [
-                {'label': 'Facturación total', 'value': float(total_revenue), 'type': 'currency'},
-                {'label': 'Clientes con compras', 'value': int(active_customers), 'type': 'number'},
-                {'label': 'Cajas abiertas', 'value': int(open_sessions), 'type': 'number'},
-                {'label': 'Alertas de inventario', 'value': int(active_alerts), 'type': 'number'}
-            ]
-        })
+        sale_day = cast(Sale.sale_date, Date).label('sale_day')
+        seasonality_query = db.session.query(
+            Category.id.label('category_id'),
+            sale_day,
+            func.coalesce(func.sum(Sale.total_amount), 0).label('revenue')
+        ).select_from(Sale) \
+         .join(Product, Sale.product_id == Product.id) \
+         .outerjoin(Category, Product.category_id == Category.id)
 
-    @app.route('/api/reports/power-bi', methods=['GET'])
-    @login_required
-    def reports_power_bi():
-        ensure_management_access()
+        seasonality_query = seasonality_query.group_by(Category.id, sale_day)
+        seasonality_query = apply_date_range_filter(seasonality_query, Sale.sale_date, period_start - timedelta(days=365), period_end)
+        if category_id:
+            seasonality_query = seasonality_query.filter(Category.id == category_id)
+        seasonality_query = seasonality_query.group_by(Category.id, sale_day)
+        seasonality_rows = seasonality_query.all()
 
-        embed_url = current_app.config.get('POWER_BI_EMBED_URL')
-        status = 'connected' if embed_url else 'pending'
+        seasonality_map = defaultdict(lambda: defaultdict(float))
+        for row in seasonality_rows:
+            cat_key = row.category_id or 0
+            day_value = row.sale_day
+            if hasattr(day_value, 'strftime'):
+                month_key = datetime(day_value.year, day_value.month, 1)
+            else:
+                parsed = datetime.strptime(str(day_value), '%Y-%m-%d')
+                month_key = datetime(parsed.year, parsed.month, 1)
+            seasonality_map[cat_key][month_key] += decimal_to_float(row.revenue or 0)
 
-        return jsonify({
-            'status': status,
-            'embed_url': embed_url,
-            'description': 'Solicita al administrador el enlace de tu tablero de Power BI para integrarlo en el sistema.'
-        })
+        seasonality_series = []
+        all_months = set()
+        for month_dict in seasonality_map.values():
+            all_months.update(month_dict.keys())
+
+        month_axis = sorted(all_months)
+        month_labels = [month.strftime('%b %Y') for month in month_axis]
+
+        for row in sales_rows:
+            category_key = row.category_id or 0
+            category_name = row.category_name or 'Sin categoría'
+            category_months = seasonality_map.get(category_key, {})
+            series_data = [round(category_months.get(month, 0.0), 2) for month in month_axis]
+            seasonality_series.append({
+                'name': category_name,
+                'data': series_data
+            })
+
+        response = {
+            'composition': composition,
+            'rotation': rotation,
+            'margins': margins,
+            'seasonality': {
+                'labels': month_labels[-12:],
+                'series': [
+                    {
+                        'name': item['name'],
+                        'data': item['data'][-12:]
+                    }
+                    for item in seasonality_series
+                ]
+            },
+            'totals': {
+                'revenue': round(total_revenue, 2),
+                'units': total_units
+            }
+        }
+
+        return jsonify(response)
 
     # ======= API INVENTARIO =======
     @app.route('/api/inventory/overview', methods=['GET'])
