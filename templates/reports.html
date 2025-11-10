@@ -14,8 +14,9 @@
   <section class="module-card reports-header">
     <div class="reports-topbar">
       <div class="reports-heading">
+        <span class="card-eyebrow">Centro analítico</span>
         <h2>Inteligencia Comercial <span class="highlight">Interactiva</span></h2>
-        <p>Explora métricas clave, identifica tendencias y profundiza en el desempeño de cada sucursal y categoría.</p>
+        <p>Explora métricas clave, identifica tendencias y profundiza en el desempeño de cada sucursal y categoría con una vista unificada.</p>
         <div class="report-meta">
           <span class="meta-label">Última actualización:</span>
           <span class="meta-value" id="reports_last_update">--</span>
@@ -33,348 +34,397 @@
         <div class="refresh-status" id="reports_refresh_status"></div>
       </div>
     </div>
-
-    <div class="filter-toolbar">
-      <div class="filter-group">
-        <label for="reports_filter_period">Período</label>
-        <select id="reports_filter_period">
-          <option value="today">Hoy</option>
-          <option value="week">Semana</option>
-          <option value="month">Mes</option>
-          <option value="quarter">Trimestre</option>
-          <option value="custom">Personalizado</option>
-        </select>
-      </div>
-      <div class="filter-group filter-dates" id="reports_custom_dates">
-        <label>Rango personalizado</label>
-        <div class="filter-dates-inputs">
-          <input type="date" id="reports_start_date">
-          <span>al</span>
-          <input type="date" id="reports_end_date">
-        </div>
-      </div>
-      <div class="filter-group">
-        <label for="reports_filter_store">Sucursal</label>
-        <select id="reports_filter_store">
-          <option value="">Todas</option>
-          {% for store in stores %}
-            <option value="{{ store.id }}">{{ store.name }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="filter-group">
-        <label for="reports_filter_category">Categoría</label>
-        <select id="reports_filter_category">
-          <option value="">Todas</option>
-          {% for category in categories %}
-            <option value="{{ category.id }}">{{ category.name }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="filter-group actions">
-        <button class="btn primary" id="reports_apply_filters">Aplicar filtros</button>
-        <button class="btn ghost" id="reports_reset_filters">Limpiar</button>
-      </div>
-    </div>
-
-    <div class="reports-kpi-grid" id="reports_kpi_grid" aria-live="polite">
-      <div class="kpi-card" data-kpi="daily_revenue">
-        <div class="kpi-icon"><i class="fas fa-cash-register"></i></div>
-        <div class="kpi-content">
-          <div class="kpi-header">
-            <span class="kpi-label">Facturación diaria</span>
-            <button class="kpi-info" type="button" aria-label="Ver detalle" data-tooltip=""></button>
-          </div>
-          <div class="kpi-value-row">
-            <strong class="kpi-value">$0</strong>
-            <span class="kpi-trend" aria-live="polite">--</span>
-          </div>
-        </div>
-      </div>
-      <div class="kpi-card" data-kpi="weekly_revenue">
-        <div class="kpi-icon"><i class="fas fa-calendar-week"></i></div>
-        <div class="kpi-content">
-          <div class="kpi-header">
-            <span class="kpi-label">Facturación semanal</span>
-            <button class="kpi-info" type="button" aria-label="Ver detalle" data-tooltip=""></button>
-          </div>
-          <div class="kpi-value-row">
-            <strong class="kpi-value">$0</strong>
-            <span class="kpi-trend" aria-live="polite">--</span>
-          </div>
-        </div>
-      </div>
-      <div class="kpi-card" data-kpi="monthly_revenue">
-        <div class="kpi-icon"><i class="fas fa-chart-line"></i></div>
-        <div class="kpi-content">
-          <div class="kpi-header">
-            <span class="kpi-label">Facturación mensual</span>
-            <button class="kpi-info" type="button" aria-label="Ver detalle" data-tooltip=""></button>
-          </div>
-          <div class="kpi-value-row">
-            <strong class="kpi-value">$0</strong>
-            <span class="kpi-trend" aria-live="polite">--</span>
-          </div>
-        </div>
-      </div>
-      <div class="kpi-card" data-kpi="avg_ticket">
-        <div class="kpi-icon"><i class="fas fa-receipt"></i></div>
-        <div class="kpi-content">
-          <div class="kpi-header">
-            <span class="kpi-label">Ticket promedio</span>
-            <button class="kpi-info" type="button" aria-label="Ver detalle" data-tooltip=""></button>
-          </div>
-          <div class="kpi-value-row">
-            <strong class="kpi-value">$0</strong>
-            <span class="kpi-trend" aria-live="polite">--</span>
-          </div>
-        </div>
-      </div>
-    </div>
   </section>
+  <div class="reports-layout">
+    <aside class="reports-sidebar">
+      <section class="module-card reports-filters">
+        <div class="card-header stacked">
+          <div class="card-header-content">
+            <span class="card-eyebrow">Panel de control</span>
+            <h3>Filtros inteligentes</h3>
+            <p>Ajusta el periodo, las sucursales y las categorías que quieres analizar en segundos.</p>
+          </div>
+        </div>
+        <div class="filter-summary" id="reports_filter_summary">
+          <span class="placeholder">Configura un filtro para personalizar los reportes.</span>
+        </div>
+        <div class="filter-toolbar">
+          <div class="filter-group">
+            <label for="reports_filter_period">Período</label>
+            <select id="reports_filter_period">
+              <option value="today">Hoy</option>
+              <option value="week">Semana</option>
+              <option value="month">Mes</option>
+              <option value="quarter">Trimestre</option>
+              <option value="custom">Personalizado</option>
+            </select>
+          </div>
+          <div class="filter-group filter-dates" id="reports_custom_dates">
+            <label>Rango personalizado</label>
+            <div class="filter-dates-inputs">
+              <input type="date" id="reports_start_date">
+              <span>al</span>
+              <input type="date" id="reports_end_date">
+            </div>
+          </div>
+          <div class="filter-group">
+            <label for="reports_filter_store">Sucursal</label>
+            <select id="reports_filter_store">
+              <option value="">Todas</option>
+              {% for store in stores %}
+                <option value="{{ store.id }}">{{ store.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="filter-group">
+            <label for="reports_filter_category">Categoría</label>
+            <select id="reports_filter_category">
+              <option value="">Todas</option>
+              {% for category in categories %}
+                <option value="{{ category.id }}">{{ category.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="filter-group actions">
+            <button class="btn primary" id="reports_apply_filters">Aplicar filtros</button>
+            <button class="btn ghost" id="reports_reset_filters">Limpiar</button>
+          </div>
+        </div>
+        <p class="filter-hint">Los filtros se aplican en toda la experiencia, incluidas las tablas y exportaciones.</p>
+      </section>
 
-  <section class="module-card reports-grid">
-    <div class="report-panel stretch" id="inventory_insights_panel">
-      <div class="panel-header">
-        <div class="panel-title">
-          <h3>Inventario por sucursal</h3>
-          <p>Analiza unidades disponibles y alertas de stock críticas en cada tienda.</p>
-        </div>
-        <div class="panel-actions">
-          <div class="toggle-group" role="group" aria-label="Vista de inventario">
-            <button type="button" data-view="units" class="toggle active">Unidades</button>
-            <button type="button" data-view="alerts" class="toggle">Alertas</button>
-            <button type="button" data-view="both" class="toggle">Ambas</button>
-          </div>
-          <button type="button" class="btn ghost" data-action="toggle-table" data-target="inventory_table_wrapper">
-            <i class="fas fa-table"></i>
-            Datos
-          </button>
-          <button type="button" class="btn ghost" data-action="export" data-target="inventory_chart">
-            <i class="fas fa-download"></i>
-            Exportar
-          </button>
-        </div>
-      </div>
-      <div class="panel-body">
-        <div class="insight-summary">
-          <div class="summary-chip">
-            <span>Total unidades</span>
-            <strong id="inventory_total_units">0</strong>
-          </div>
-          <div class="summary-chip alert">
-            <span>Alertas activas</span>
-            <strong id="inventory_total_alerts">0</strong>
-          </div>
-          <div class="summary-chip" id="inventory_alert_rate">
-            <span>Tasa de alerta</span>
-            <strong>0%</strong>
+      <section class="module-card reports-glance">
+        <div class="card-header stacked">
+          <div class="card-header-content">
+            <span class="card-eyebrow">Seguimiento</span>
+            <h3>Destacados rápidos</h3>
+            <p>Una síntesis del desempeño bajo los filtros actuales.</p>
           </div>
         </div>
-        <div id="inventory_chart" class="chart-container"></div>
-        <div class="data-table" id="inventory_table_wrapper" hidden>
-          <table>
-            <thead>
-              <tr>
-                <th>Sucursal</th>
-                <th>Unidades</th>
-                <th>Alertas</th>
-                <th>Tasa de alerta</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-        <div class="detail-drawer" id="inventory_detail_panel" hidden>
-          <div class="drawer-header">
-            <h4 id="inventory_detail_title">Detalle de inventario</h4>
-            <button type="button" class="btn icon" id="inventory_detail_close"><i class="fas fa-times"></i></button>
-          </div>
-          <div class="drawer-content">
-            <table>
-              <thead>
-                <tr>
-                  <th>Producto</th>
-                  <th>SKU</th>
-                  <th>Categoría</th>
-                  <th>Stock</th>
-                  <th>Mínimo</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
+        <p class="reports-headline" id="reports_kpi_headline">Aún no hay datos para mostrar.</p>
+        <ul class="reports-highlight-list" id="reports_kpi_highlights">
+          <li class="placeholder">Espera a que los indicadores se actualicen para ver los puntos clave.</li>
+        </ul>
+      </section>
+    </aside>
+    <div class="reports-content">
+      <section class="module-card reports-kpis">
+        <div class="card-header stacked">
+          <div class="card-header-content">
+            <span class="card-eyebrow">Indicadores clave</span>
+            <h3>Salud del negocio</h3>
+            <p>Monitorea facturación y ticket promedio para anticipar decisiones.</p>
           </div>
         </div>
-      </div>
-    </div>
+        <div class="reports-kpi-grid" id="reports_kpi_grid" aria-live="polite">
+          <div class="kpi-card" data-kpi="daily_revenue">
+            <div class="kpi-icon"><i class="fas fa-cash-register"></i></div>
+            <div class="kpi-content">
+              <div class="kpi-header">
+                <span class="kpi-label">Facturación diaria</span>
+                <button class="kpi-info" type="button" aria-label="Ver detalle" data-tooltip=""></button>
+              </div>
+              <div class="kpi-value-row">
+                <strong class="kpi-value">$0</strong>
+                <span class="kpi-trend" aria-live="polite">--</span>
+              </div>
+            </div>
+          </div>
+          <div class="kpi-card" data-kpi="weekly_revenue">
+            <div class="kpi-icon"><i class="fas fa-calendar-week"></i></div>
+            <div class="kpi-content">
+              <div class="kpi-header">
+                <span class="kpi-label">Facturación semanal</span>
+                <button class="kpi-info" type="button" aria-label="Ver detalle" data-tooltip=""></button>
+              </div>
+              <div class="kpi-value-row">
+                <strong class="kpi-value">$0</strong>
+                <span class="kpi-trend" aria-live="polite">--</span>
+              </div>
+            </div>
+          </div>
+          <div class="kpi-card" data-kpi="monthly_revenue">
+            <div class="kpi-icon"><i class="fas fa-chart-line"></i></div>
+            <div class="kpi-content">
+              <div class="kpi-header">
+                <span class="kpi-label">Facturación mensual</span>
+                <button class="kpi-info" type="button" aria-label="Ver detalle" data-tooltip=""></button>
+              </div>
+              <div class="kpi-value-row">
+                <strong class="kpi-value">$0</strong>
+                <span class="kpi-trend" aria-live="polite">--</span>
+              </div>
+            </div>
+          </div>
+          <div class="kpi-card" data-kpi="avg_ticket">
+            <div class="kpi-icon"><i class="fas fa-receipt"></i></div>
+            <div class="kpi-content">
+              <div class="kpi-header">
+                <span class="kpi-label">Ticket promedio</span>
+                <button class="kpi-info" type="button" aria-label="Ver detalle" data-tooltip=""></button>
+              </div>
+              <div class="kpi-value-row">
+                <strong class="kpi-value">$0</strong>
+                <span class="kpi-trend" aria-live="polite">--</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
 
-    <div class="report-panel" id="top_products_panel">
-      <div class="panel-header">
-        <div class="panel-title">
-          <h3>Top productos más vendidos</h3>
-          <p>Ranking dinámico con distribución de ingresos y seguimiento histórico.</p>
-        </div>
-        <div class="panel-actions">
-          <div class="toggle-group" role="group" aria-label="Métrica de producto">
-            <button type="button" data-metric="units" class="toggle active">Unidades</button>
-            <button type="button" data-metric="revenue" class="toggle">Ingresos</button>
+      <section class="module-card reports-main">
+        <div class="card-header stacked">
+          <div class="card-header-content">
+            <span class="card-eyebrow">Análisis avanzado</span>
+            <h3>Reportes dinámicos</h3>
+            <p>Visualiza inventario, ventas y clientes en profundidad para obtener respuestas accionables.</p>
           </div>
-          <button type="button" class="btn ghost" data-action="toggle-table" data-target="products_table_wrapper">
-            <i class="fas fa-table"></i>
-            Datos
-          </button>
-          <button type="button" class="btn ghost" data-action="export" data-target="top_products_chart">
-            <i class="fas fa-download"></i>
-            Exportar
-          </button>
         </div>
-      </div>
-      <div class="panel-body">
-        <div class="charts-split">
-          <div class="chart-container" id="top_products_chart"></div>
-          <div class="chart-container" id="top_products_distribution"></div>
-        </div>
-        <div class="product-history" id="product_history_panel" hidden>
-          <h4 id="product_history_title">Histórico del producto</h4>
-          <div id="product_history_chart" class="chart-container"></div>
-        </div>
-        <div class="data-table" id="products_table_wrapper" hidden>
-          <table>
-            <thead>
-              <tr>
-                <th>Producto</th>
-                <th>Unidades</th>
-                <th>Ingresos</th>
-                <th>Tendencia</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </div>
-    </div>
+        <div class="reports-grid">
+          <div class="report-panel stretch" id="inventory_insights_panel">
+            <div class="panel-header">
+              <div class="panel-title">
+                <h3>Inventario por sucursal</h3>
+                <p>Analiza unidades disponibles y alertas de stock críticas en cada tienda.</p>
+              </div>
+              <div class="panel-actions">
+                <div class="toggle-group" role="group" aria-label="Vista de inventario">
+                  <button type="button" data-view="units" class="toggle active">Unidades</button>
+                  <button type="button" data-view="alerts" class="toggle">Alertas</button>
+                  <button type="button" data-view="both" class="toggle">Ambas</button>
+                </div>
+                <button type="button" class="btn ghost" data-action="toggle-table" data-target="inventory_table_wrapper">
+                  <i class="fas fa-table"></i>
+                  Datos
+                </button>
+                <button type="button" class="btn ghost" data-action="export" data-target="inventory_chart">
+                  <i class="fas fa-download"></i>
+                  Exportar
+                </button>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div class="insight-summary">
+                <div class="summary-chip">
+                  <span>Total unidades</span>
+                  <strong id="inventory_total_units">0</strong>
+                </div>
+                <div class="summary-chip alert">
+                  <span>Alertas activas</span>
+                  <strong id="inventory_total_alerts">0</strong>
+                </div>
+                <div class="summary-chip" id="inventory_alert_rate">
+                  <span>Tasa de alerta</span>
+                  <strong>0%</strong>
+                </div>
+              </div>
+              <div id="inventory_chart" class="chart-container"></div>
+              <div class="data-table" id="inventory_table_wrapper" hidden>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Sucursal</th>
+                      <th>Unidades</th>
+                      <th>Alertas</th>
+                      <th>Tasa de alerta</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+              <div class="detail-drawer" id="inventory_detail_panel" hidden>
+                <div class="drawer-header">
+                  <h4 id="inventory_detail_title">Detalle de inventario</h4>
+                  <button type="button" class="btn icon" id="inventory_detail_close"><i class="fas fa-times"></i></button>
+                </div>
+                <div class="drawer-content">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Producto</th>
+                        <th>SKU</th>
+                        <th>Categoría</th>
+                        <th>Stock</th>
+                        <th>Mínimo</th>
+                      </tr>
+                    </thead>
+                    <tbody></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
 
-    <div class="report-panel" id="financial_indicators_panel">
-      <div class="panel-header">
-        <div class="panel-title">
-          <h3>Indicadores financieros avanzados</h3>
-          <p>Seguimiento de ingresos, márgenes y comportamiento de clientes.</p>
-        </div>
-        <div class="panel-actions">
-          <button type="button" class="btn ghost" data-action="toggle-table" data-target="financial_table_wrapper">
-            <i class="fas fa-table"></i>
-            Datos
-          </button>
-        </div>
-      </div>
-      <div class="panel-body">
-        <div class="financial-indicators" id="financial_indicator_cards"></div>
-        <div class="customer-breakdown" id="customer_breakdown_panel">
-          <div class="breakdown-card">
-            <h4>Clientes nuevos</h4>
-            <p class="breakdown-value" data-type="new">0</p>
-            <span class="breakdown-meta" data-type="new">0%</span>
+          <div class="report-panel" id="top_products_panel">
+            <div class="panel-header">
+              <div class="panel-title">
+                <h3>Top productos más vendidos</h3>
+                <p>Ranking dinámico con distribución de ingresos y seguimiento histórico.</p>
+              </div>
+              <div class="panel-actions">
+                <div class="toggle-group" role="group" aria-label="Métrica de producto">
+                  <button type="button" data-metric="units" class="toggle active">Unidades</button>
+                  <button type="button" data-metric="revenue" class="toggle">Ingresos</button>
+                </div>
+                <button type="button" class="btn ghost" data-action="toggle-table" data-target="products_table_wrapper">
+                  <i class="fas fa-table"></i>
+                  Datos
+                </button>
+                <button type="button" class="btn ghost" data-action="export" data-target="top_products_chart">
+                  <i class="fas fa-download"></i>
+                  Exportar
+                </button>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div class="charts-split">
+                <div class="chart-container" id="top_products_chart"></div>
+                <div class="chart-container" id="top_products_distribution"></div>
+              </div>
+              <div class="product-history" id="product_history_panel" hidden>
+                <h4 id="product_history_title">Histórico del producto</h4>
+                <div id="product_history_chart" class="chart-container"></div>
+              </div>
+              <div class="data-table" id="products_table_wrapper" hidden>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Producto</th>
+                      <th>Unidades</th>
+                      <th>Ingresos</th>
+                      <th>Tendencia</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
           </div>
-          <div class="breakdown-card">
-            <h4>Clientes recurrentes</h4>
-            <p class="breakdown-value" data-type="recurring">0</p>
-            <span class="breakdown-meta" data-type="recurring">0%</span>
-          </div>
-          <div class="breakdown-card total">
-            <h4>Ingresos analizados</h4>
-            <p class="breakdown-value" data-type="revenue">$0</p>
-          </div>
-        </div>
-        <div class="data-table" id="financial_table_wrapper" hidden>
-          <table>
-            <thead>
-              <tr>
-                <th>Indicador</th>
-                <th>Valor</th>
-                <th>Variación</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </div>
-    </div>
 
-    <div class="report-panel stretch" id="sales_heatmap_panel">
-      <div class="panel-header">
-        <div class="panel-title">
-          <h3>Tendencias de ventas por horario</h3>
-          <p>Identifica horarios pico de cada sucursal y compáralos visualmente.</p>
-        </div>
-        <div class="panel-actions">
-          <button type="button" class="btn ghost" data-action="toggle-table" data-target="heatmap_table_wrapper">
-            <i class="fas fa-table"></i>
-            Datos
-          </button>
-          <button type="button" class="btn ghost" data-action="export" data-target="sales_heatmap_chart">
-            <i class="fas fa-download"></i>
-            Exportar
-          </button>
-        </div>
-      </div>
-      <div class="panel-body">
-        <div id="sales_heatmap_chart" class="chart-container"></div>
-        <div class="data-table" id="heatmap_table_wrapper" hidden>
-          <table>
-            <thead>
-              <tr>
-                <th>Sucursal</th>
-                <th>Horario</th>
-                <th>Monto</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-        <div class="peak-list" id="heatmap_peaks"></div>
-      </div>
-    </div>
+          <div class="report-panel" id="financial_indicators_panel">
+            <div class="panel-header">
+              <div class="panel-title">
+                <h3>Indicadores financieros avanzados</h3>
+                <p>Seguimiento de ingresos, márgenes y comportamiento de clientes.</p>
+              </div>
+              <div class="panel-actions">
+                <button type="button" class="btn ghost" data-action="toggle-table" data-target="financial_table_wrapper">
+                  <i class="fas fa-table"></i>
+                  Datos
+                </button>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div class="financial-indicators" id="financial_indicator_cards"></div>
+              <div class="customer-breakdown" id="customer_breakdown_panel">
+                <div class="breakdown-card">
+                  <h4>Clientes nuevos</h4>
+                  <p class="breakdown-value" data-type="new">0</p>
+                  <span class="breakdown-meta" data-type="new">0%</span>
+                </div>
+                <div class="breakdown-card">
+                  <h4>Clientes recurrentes</h4>
+                  <p class="breakdown-value" data-type="recurring">0</p>
+                  <span class="breakdown-meta" data-type="recurring">0%</span>
+                </div>
+                <div class="breakdown-card total">
+                  <h4>Ingresos analizados</h4>
+                  <p class="breakdown-value" data-type="revenue">$0</p>
+                </div>
+              </div>
+              <div class="data-table" id="financial_table_wrapper" hidden>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Indicador</th>
+                      <th>Valor</th>
+                      <th>Variación</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
 
-    <div class="report-panel stretch" id="category_analysis_panel">
-      <div class="panel-header">
-        <div class="panel-title">
-          <h3>Análisis por categorías</h3>
-          <p>Composición de ventas, rotación y estacionalidad por línea de producto.</p>
+          <div class="report-panel stretch" id="sales_heatmap_panel">
+            <div class="panel-header">
+              <div class="panel-title">
+                <h3>Tendencias de ventas por horario</h3>
+                <p>Identifica horarios pico de cada sucursal y compáralos visualmente.</p>
+              </div>
+              <div class="panel-actions">
+                <button type="button" class="btn ghost" data-action="toggle-table" data-target="heatmap_table_wrapper">
+                  <i class="fas fa-table"></i>
+                  Datos
+                </button>
+                <button type="button" class="btn ghost" data-action="export" data-target="sales_heatmap_chart">
+                  <i class="fas fa-download"></i>
+                  Exportar
+                </button>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div id="sales_heatmap_chart" class="chart-container"></div>
+              <div class="data-table" id="heatmap_table_wrapper" hidden>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Sucursal</th>
+                      <th>Horario</th>
+                      <th>Monto</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+              <div class="peak-list" id="heatmap_peaks"></div>
+            </div>
+          </div>
+
+          <div class="report-panel stretch" id="category_analysis_panel">
+            <div class="panel-header">
+              <div class="panel-title">
+                <h3>Análisis por categorías</h3>
+                <p>Composición de ventas, rotación y estacionalidad por línea de producto.</p>
+              </div>
+              <div class="panel-actions">
+                <button type="button" class="btn ghost" data-action="toggle-table" data-target="category_table_wrapper">
+                  <i class="fas fa-table"></i>
+                  Datos
+                </button>
+                <button type="button" class="btn ghost" data-action="export" data-target="category_treemap">
+                  <i class="fas fa-download"></i>
+                  Exportar
+                </button>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div class="charts-grid">
+                <div class="chart-container" id="category_treemap"></div>
+                <div class="chart-container" id="category_rotation_chart"></div>
+              </div>
+              <div class="chart-container" id="category_seasonality_chart"></div>
+              <div class="data-table" id="category_table_wrapper" hidden>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Categoría</th>
+                      <th>Ingresos</th>
+                      <th>Unidades</th>
+                      <th>Rotación</th>
+                      <th>Margen estimado</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
         </div>
-        <div class="panel-actions">
-          <button type="button" class="btn ghost" data-action="toggle-table" data-target="category_table_wrapper">
-            <i class="fas fa-table"></i>
-            Datos
-          </button>
-          <button type="button" class="btn ghost" data-action="export" data-target="category_treemap">
-            <i class="fas fa-download"></i>
-            Exportar
-          </button>
-        </div>
-      </div>
-      <div class="panel-body">
-        <div class="charts-grid">
-          <div class="chart-container" id="category_treemap"></div>
-          <div class="chart-container" id="category_rotation_chart"></div>
-        </div>
-        <div class="chart-container" id="category_seasonality_chart"></div>
-        <div class="data-table" id="category_table_wrapper" hidden>
-          <table>
-            <thead>
-              <tr>
-                <th>Categoría</th>
-                <th>Ingresos</th>
-                <th>Unidades</th>
-                <th>Rotación</th>
-                <th>Margen estimado</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </div>
+      </section>
     </div>
-  </section>
+  </div>
 </div>
 
 <div class="reports-toast-container" id="reports_toasts" aria-live="polite" aria-atomic="true"></div>

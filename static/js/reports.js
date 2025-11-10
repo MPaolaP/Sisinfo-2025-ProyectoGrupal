@@ -20,6 +20,32 @@
   const formatCurrency = (value) => currencyFormatter.format(value || 0);
   const formatNumber = (value) => numberFormatter.format(value || 0);
   const formatPercentage = (value) => `${value > 0 ? '+' : ''}${value.toFixed(2)}%`;
+  const dateFormatter = new Intl.DateTimeFormat('es-CO', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric'
+  });
+
+  const formatDateLabel = (value) => {
+    if (!value) {
+      return '';
+    }
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return value;
+    }
+    return dateFormatter.format(date);
+  };
+
+  const trendSymbol = (direction) => {
+    if (direction === 'up') {
+      return '▲';
+    }
+    if (direction === 'down') {
+      return '▼';
+    }
+    return '—';
+  };
 
   class ReportsDashboard {
     constructor(context) {
@@ -62,6 +88,8 @@
       if (!this.dom.module) {
         return;
       }
+      this.updateFilters();
+      this.renderFilterSummary();
       this.bindEvents();
       this.initializeCharts();
       this.toggleCustomDates();
@@ -83,7 +111,10 @@
       this.dom.filterApply = document.getElementById('reports_apply_filters');
       this.dom.filterReset = document.getElementById('reports_reset_filters');
       this.dom.customDates = document.getElementById('reports_custom_dates');
+      this.dom.filterSummary = document.getElementById('reports_filter_summary');
       this.dom.kpiGrid = document.getElementById('reports_kpi_grid');
+      this.dom.kpiHeadline = document.getElementById('reports_kpi_headline');
+      this.dom.kpiHighlights = document.getElementById('reports_kpi_highlights');
       this.dom.inventoryTable = document.querySelector('#inventory_table_wrapper tbody');
       this.dom.inventoryDetail = {
         panel: document.getElementById('inventory_detail_panel'),
@@ -218,12 +249,61 @@
       }
     }
 
+    renderFilterSummary() {
+      if (!this.dom.filterSummary) {
+        return;
+      }
+      const { period, startDate, endDate, storeId, categoryId } = this.state.filters;
+      const summary = [];
+      summary.push(`<span class="summary-pill"><i class="fas fa-calendar-alt" aria-hidden="true"></i>${this.getPeriodLabel(period)}</span>`);
+      if (period === 'custom') {
+        if (startDate && endDate) {
+          summary.push(`<span class="summary-pill"><i class="fas fa-clock" aria-hidden="true"></i>${formatDateLabel(startDate)} - ${formatDateLabel(endDate)}</span>`);
+        } else {
+          summary.push('<span class="summary-pill"><i class="fas fa-clock" aria-hidden="true"></i>Selecciona fechas</span>');
+        }
+      }
+      summary.push(`<span class="summary-pill"><i class="fas fa-store" aria-hidden="true"></i>${this.getStoreName(storeId)}</span>`);
+      summary.push(`<span class="summary-pill"><i class="fas fa-tags" aria-hidden="true"></i>${this.getCategoryName(categoryId)}</span>`);
+      this.dom.filterSummary.innerHTML = summary.join('');
+    }
+
+    getPeriodLabel(period) {
+      const labels = {
+        today: 'Hoy',
+        week: 'Últimos 7 días',
+        month: 'Últimos 30 días',
+        quarter: 'Último trimestre',
+        custom: 'Rango personalizado'
+      };
+      return labels[period] || 'Período seleccionado';
+    }
+
+    getStoreName(storeId) {
+      if (!storeId) {
+        return 'Todas las sucursales';
+      }
+      const stores = Array.isArray(this.context.stores) ? this.context.stores : [];
+      const store = stores.find((item) => String(item.id) === String(storeId));
+      return store ? store.name : 'Sucursal seleccionada';
+    }
+
+    getCategoryName(categoryId) {
+      if (!categoryId) {
+        return 'Todas las categorías';
+      }
+      const categories = Array.isArray(this.context.categories) ? this.context.categories : [];
+      const category = categories.find((item) => String(item.id) === String(categoryId));
+      return category ? category.name : 'Categoría seleccionada';
+    }
+
     updateFilters() {
       this.state.filters.period = this.dom.filterPeriod ? this.dom.filterPeriod.value : 'today';
       this.state.filters.startDate = this.dom.filterStart ? this.dom.filterStart.value : '';
       this.state.filters.endDate = this.dom.filterEnd ? this.dom.filterEnd.value : '';
       this.state.filters.storeId = this.dom.filterStore ? this.dom.filterStore.value : '';
       this.state.filters.categoryId = this.dom.filterCategory ? this.dom.filterCategory.value : '';
+      this.renderFilterSummary();
     }
 
     resetFilters() {
@@ -378,6 +458,12 @@
 
     updateKPIs(data, isAutoRefresh = false) {
       if (!data || !Array.isArray(data.kpis)) {
+        if (this.dom.kpiHighlights) {
+          this.dom.kpiHighlights.innerHTML = '<li class="placeholder">Aún no hay datos disponibles.</li>';
+        }
+        if (this.dom.kpiHeadline) {
+          this.dom.kpiHeadline.textContent = 'Aún no hay datos para mostrar.';
+        }
         return;
       }
       data.kpis.forEach((kpi) => {
@@ -388,9 +474,9 @@
         const valueElement = card.querySelector('.kpi-value');
         const trendElement = card.querySelector('.kpi-trend');
         const infoButton = card.querySelector('.kpi-info');
-        valueElement.textContent = formatCurrency(kpi.value);
+        valueElement.textContent = this.formatKpiDisplayValue(kpi);
         if (trendElement) {
-          trendElement.textContent = `${kpi.trend.direction === 'up' ? '▲' : kpi.trend.direction === 'down' ? '▼' : '—'} ${formatPercentage(kpi.trend.percentage)}`;
+          trendElement.textContent = `${trendSymbol(kpi.trend.direction)} ${formatPercentage(kpi.trend.percentage)}`;
           trendElement.classList.remove('up', 'down', 'flat');
           trendElement.classList.add(kpi.trend.direction);
         }
@@ -409,6 +495,61 @@
         }
         this.state.previousKpis[kpi.key] = kpi.value;
       });
+      this.updateKpiHeadline(data.kpis);
+      this.updateKpiHighlights(data.kpis);
+    }
+
+    updateKpiHeadline(kpis) {
+      if (!this.dom.kpiHeadline) {
+        return;
+      }
+      if (!Array.isArray(kpis) || !kpis.length) {
+        this.dom.kpiHeadline.textContent = 'Aún no hay datos para mostrar.';
+        return;
+      }
+      const priorityKeys = ['monthly_revenue', 'weekly_revenue', 'daily_revenue', 'avg_ticket'];
+      const featured = priorityKeys.map((key) => kpis.find((item) => item.key === key)).find(Boolean) || kpis[0];
+      const direction = featured.trend?.direction || 'flat';
+      const trendText = `${trendSymbol(direction)} ${formatPercentage((featured.trend?.percentage || 0))} vs periodo anterior`;
+      this.dom.kpiHeadline.innerHTML = `
+        <span>${featured.label}</span>
+        <strong>${this.formatKpiDisplayValue(featured)}</strong>
+        <span class="highlight-trend ${direction}">${trendText}</span>
+      `;
+    }
+
+    updateKpiHighlights(kpis) {
+      if (!this.dom.kpiHighlights) {
+        return;
+      }
+      if (!Array.isArray(kpis) || !kpis.length) {
+        this.dom.kpiHighlights.innerHTML = '<li class="placeholder">Aún no hay datos disponibles.</li>';
+        return;
+      }
+      const topKpis = [...kpis]
+        .sort((a, b) => (b.value || 0) - (a.value || 0))
+        .slice(0, 3);
+      this.dom.kpiHighlights.innerHTML = topKpis.map((kpi) => {
+        const direction = kpi.trend?.direction || 'flat';
+        return `
+          <li>
+            <span class="highlight-label">${kpi.label}</span>
+            <span class="highlight-value">${this.formatKpiDisplayValue(kpi)}</span>
+            <span class="highlight-trend ${direction}">${trendSymbol(direction)} ${formatPercentage(kpi.trend?.percentage || 0)}</span>
+          </li>
+        `;
+      }).join('');
+    }
+
+    formatKpiDisplayValue(kpi) {
+      if (!kpi) {
+        return formatCurrency(0);
+      }
+      const currencyKeys = ['daily_revenue', 'weekly_revenue', 'monthly_revenue', 'avg_ticket'];
+      if (currencyKeys.includes(kpi.key)) {
+        return formatCurrency(kpi.value);
+      }
+      return formatNumber(kpi.value);
     }
 
     updateInventory(data) {
