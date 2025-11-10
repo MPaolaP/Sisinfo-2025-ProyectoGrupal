@@ -2,7 +2,7 @@
 {% block title %}Ventas y Facturación | Distrito 5{% endblock %}
 
 {% block content %}
-<div class="module-wrapper">
+<div class="module-wrapper" data-user-type="{{ user_type }}">
   <section class="module-card session-card">
     <div class="card-header">
       <div>
@@ -41,39 +41,19 @@
     <div class="card-header">
       <div>
         <h2>Punto de Venta <span class="highlight">(POS)</span></h2>
-        <p>Escanea productos con código de barras o QR y genera la factura en segundos.</p>
+        <p>Busca productos por código o nombre, aplica descuentos y genera la factura al instante.</p>
       </div>
       <div class="pos-session-info" id="pos_session_info">Caja no iniciada</div>
     </div>
     <div class="pos-grid">
       <div class="pos-search">
         <div class="input-stack">
-          <label for="scanner_input">Escáner</label>
-          <input type="text" id="scanner_input" placeholder="Escanea un código de barras o QR" autocomplete="off">
-        </div>
-        <div class="scanner-tools">
-          <button type="button" class="btn ghost" id="toggle_scanner_btn">
-            <i class="fas fa-camera"></i>
-            Usar cámara
-          </button>
-          <button type="button" class="btn ghost" id="stop_scanner_btn" disabled>
-            <i class="fas fa-stop"></i>
-            Detener escáner
-          </button>
-        </div>
-        <div class="scanner-container" id="scanner_container" aria-live="polite">
-          <video id="scanner_video" class="scanner-preview" autoplay muted playsinline></video>
-          <div class="scanner-status" id="scanner_status">
-            <i class="fas fa-info-circle"></i>
-            <span>Activa la cámara para comenzar a leer códigos de barras o QR.</span>
-          </div>
-        </div>
-        <div class="input-stack">
           <label for="product_search">Buscar producto</label>
-          <input type="text" id="product_search" placeholder="Nombre o SKU" autocomplete="off">
+          <input type="text" id="product_search" placeholder="Código o nombre" autocomplete="off" list="product_suggestions">
         </div>
+        <datalist id="product_suggestions"></datalist>
         <div class="search-results" id="product_results">
-          <p class="placeholder">Busca o escanea para ver resultados.</p>
+          <p class="placeholder">Escribe para buscar productos o presiona Enter para agregarlos rápidamente.</p>
         </div>
       </div>
       <div class="pos-cart">
@@ -87,16 +67,17 @@
               <tr>
                 <th>Producto</th>
                 <th>Cant.</th>
+                <th>Desc.</th>
                 <th>Precio</th>
                 <th>Total</th>
                 <th></th>
               </tr>
             </thead>
-            <tbody id="cart_items">
-              <tr class="empty-row">
-                <td colspan="5">Agrega productos al carrito para iniciar la venta.</td>
-              </tr>
-            </tbody>
+              <tbody id="cart_items">
+                <tr class="empty-row">
+                  <td colspan="6">Agrega productos al carrito para iniciar la venta.</td>
+                </tr>
+              </tbody>
           </table>
         </div>
         <div class="cart-summary">
@@ -173,12 +154,94 @@
     <div class="card-header">
       <div>
         <h2>Facturación <span class="highlight">Reciente</span></h2>
-        <p>Consulta las últimas facturas generadas en el punto de venta.</p>
+        <p>Consulta las facturas generadas hoy, descárgalas y edítalas si tienes permisos.</p>
       </div>
       <button type="button" class="btn ghost" id="refresh_invoices_btn">Actualizar</button>
     </div>
     <div class="invoice-list" id="invoice_list">
       <p class="placeholder">Aún no se registran facturas.</p>
+    </div>
+    <div class="invoice-editor" id="invoice_editor" hidden data-user-type="{{ user_type }}">
+      <div class="editor-header">
+        <h3>Editar factura</h3>
+        <button type="button" class="btn icon" id="close_invoice_editor"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="editor-body">
+        <div class="editor-meta" id="invoice_editor_meta"></div>
+        <div class="editor-search">
+          <label for="invoice_editor_search">Agregar producto</label>
+          <input type="text" id="invoice_editor_search" placeholder="Buscar por código o nombre" list="invoice_editor_suggestions" autocomplete="off">
+          <datalist id="invoice_editor_suggestions"></datalist>
+        </div>
+        <div class="editor-table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th>Cant.</th>
+                <th>Precio</th>
+                <th>Desc.</th>
+                <th>Total</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="invoice_editor_items"></tbody>
+          </table>
+        </div>
+        <div class="editor-summary" id="invoice_editor_summary"></div>
+        <div class="editor-actions">
+          <div class="form-field">
+            <label for="invoice_editor_payment">Método de pago</label>
+            <select id="invoice_editor_payment">
+              <option value="Efectivo">Efectivo</option>
+              <option value="Tarjeta">Tarjeta</option>
+              <option value="Transferencia">Transferencia</option>
+              <option value="Mixto">Mixto</option>
+            </select>
+          </div>
+          <div class="editor-buttons">
+            <button type="button" class="btn secondary" id="invoice_editor_logs_btn">Ver historial</button>
+            <button type="button" class="btn danger" id="invoice_editor_void_btn">Anular</button>
+            <button type="button" class="btn primary" id="invoice_editor_save_btn">Guardar cambios</button>
+          </div>
+        </div>
+        <div class="editor-logs" id="invoice_editor_logs" hidden>
+          <h4>Historial de cambios</h4>
+          <div class="logs-container" id="invoice_logs_container"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="module-card closing-card">
+    <div class="card-header">
+      <div>
+        <h2>Cierre de <span class="highlight">Caja</span></h2>
+        <p>Genera el resumen diario por sucursal y descarga los reportes.</p>
+      </div>
+    </div>
+    <form class="closing-form" id="closing_form" autocomplete="off">
+      <div class="form-field">
+        <label for="closing_date">Fecha</label>
+        <input type="date" id="closing_date" value="{{ date|default('') }}">
+      </div>
+      <div class="form-field">
+        <label for="closing_store">Sucursal</label>
+        <select id="closing_store">
+          <option value="">Todas</option>
+          {% for store in stores %}
+          <option value="{{ store.id }}">{{ store.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="closing-actions">
+        <button type="button" class="btn primary" id="generate_closing_btn">Generar reporte</button>
+        <button type="button" class="btn ghost" id="download_closing_pdf" disabled>Descargar PDF</button>
+        <button type="button" class="btn ghost" id="download_closing_csv" disabled>Descargar Excel/CSV</button>
+      </div>
+    </form>
+    <div class="closing-summary" id="closing_summary">
+      <p class="placeholder">Selecciona una fecha y sucursal para ver el resumen del día.</p>
     </div>
   </section>
 </div>
@@ -194,9 +257,16 @@
     openSession: "{{ url_for('open_pos_session') }}",
     closeSession: "{{ url_for('close_pos_session', session_id=0) }}".replace('0', '{session_id}'),
     checkout: "{{ url_for('pos_checkout') }}",
-    invoices: "{{ url_for('recent_invoices') }}"
+    invoices: "{{ url_for('recent_invoices') }}",
+    invoiceDetail: "{{ url_for('manage_invoice', invoice_id=0) }}".replace('0', '{invoice_id}'),
+    invoiceUpdate: "{{ url_for('manage_invoice', invoice_id=0) }}".replace('0', '{invoice_id}'),
+    invoiceVoid: "{{ url_for('void_invoice', invoice_id=0) }}".replace('0', '{invoice_id}'),
+    invoiceLogs: "{{ url_for('invoice_logs', invoice_id=0) }}".replace('0', '{invoice_id}'),
+    invoicePdf: "{{ url_for('download_invoice_pdf', invoice_id=0) }}".replace('0', '{invoice_id}'),
+    closingReport: "{{ url_for('closing_report') }}",
+    closingReportPdf: "{{ url_for('closing_report_pdf') }}",
+    closingReportCsv: "{{ url_for('closing_report_export') }}"
   };
 </script>
-<script src="https://unpkg.com/@zxing/library@0.20.0/umd/index.min.js" integrity="sha384-BUg0obJNdDG8zvI4NCzCBNQZknftCBVK5NVNHX6DBZp9YeFHOnjLeQk3RQy4wg8x" crossorigin="anonymous"></script>
 <script src="{{ url_for('static', filename='js/sales.js') }}"></script>
-{% endblock %}
+{% endblock %}

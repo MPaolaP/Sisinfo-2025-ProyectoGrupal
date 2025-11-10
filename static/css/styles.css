@@ -2832,65 +2832,6 @@ h2 .highlight {
     gap: 0.45rem;
 }
 
-.scanner-tools {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.75rem;
-    align-items: center;
-}
-
-.scanner-tools .btn {
-    flex-shrink: 0;
-}
-
-.scanner-container {
-    display: none;
-    background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-radius: 1rem;
-    padding: 1rem;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
-    position: relative;
-}
-
-.scanner-container.active {
-    display: block;
-}
-
-.scanner-preview {
-    width: 100%;
-    max-height: 260px;
-    border-radius: 0.9rem;
-    background: #000;
-    object-fit: cover;
-}
-
-.scanner-status {
-    margin-top: 0.75rem;
-    font-size: 0.85rem;
-    color: var(--color-text-muted);
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-}
-
-.scanner-status i {
-    color: var(--color-primary);
-    transition: color 0.2s ease;
-}
-
-.scanner-status[data-tone="success"] i {
-    color: var(--color-success);
-}
-
-.scanner-status[data-tone="error"] i {
-    color: var(--color-danger);
-}
-
-.scanner-status[data-tone="warning"] i {
-    color: var(--color-warning);
-}
-
 .search-results {
     background: rgba(15, 23, 42, 0.6);
     border-radius: 0.9rem;
@@ -3107,6 +3048,235 @@ h2 .highlight {
     display: block;
     font-size: 0.85rem;
     color: #a1a1aa;
+}
+
+.status-tag.small {
+    padding: 0.2rem 0.6rem;
+    font-size: 0.68rem;
+}
+
+.invoice-info,
+.invoice-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.invoice-info > div {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.invoice-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.invoice-actions .btn.small {
+    min-width: 90px;
+}
+
+.cart-table input.discount-input {
+    width: 5.5rem;
+}
+
+.invoice-editor {
+    margin-top: 1.5rem;
+    background: rgba(15, 23, 42, 0.7);
+    border-radius: 1rem;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+}
+
+.invoice-editor[hidden] {
+    display: none;
+}
+
+.invoice-editor .editor-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.invoice-editor .editor-body {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.editor-meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.75rem;
+    font-size: 0.9rem;
+    color: #cbd5f5;
+}
+
+.editor-search {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.editor-table-wrapper {
+    overflow-x: auto;
+}
+
+.editor-table-wrapper table {
+    width: 100%;
+    border-collapse: collapse;
+    background: rgba(15, 23, 42, 0.55);
+    border-radius: 0.75rem;
+    overflow: hidden;
+}
+
+.editor-table-wrapper th,
+.editor-table-wrapper td {
+    padding: 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+}
+
+.editor-table-wrapper input[type="number"] {
+    width: 100%;
+}
+
+.editor-table-wrapper tr:last-child td {
+    border-bottom: none;
+}
+
+.editor-item-name {
+    font-weight: 600;
+    color: #f1f5f9;
+}
+
+.editor-summary {
+    display: flex;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    font-weight: 600;
+}
+
+.editor-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: flex-end;
+}
+
+.editor-actions .form-field {
+    min-width: 220px;
+}
+
+.editor-buttons {
+    display: flex;
+    gap: 0.75rem;
+}
+
+.editor-logs {
+    background: rgba(15, 23, 42, 0.5);
+    border-radius: 0.75rem;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.editor-logs[hidden] {
+    display: none;
+}
+
+.logs-container {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.log-entry {
+    padding: 0.65rem 0;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+    font-size: 0.85rem;
+}
+
+.log-entry:last-child {
+    border-bottom: none;
+}
+
+.closing-form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: flex-end;
+    margin-bottom: 1.25rem;
+}
+
+.closing-actions {
+    display: flex;
+    gap: 0.75rem;
+}
+
+.closing-summary {
+    background: rgba(15, 23, 42, 0.6);
+    border-radius: 1rem;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    padding: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.closing-header {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    font-weight: 600;
+    color: #e2e8f0;
+}
+
+.closing-totals {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1rem;
+}
+
+.closing-totals div {
+    background: rgba(15, 23, 42, 0.55);
+    border-radius: 0.75rem;
+    padding: 0.85rem 1rem;
+}
+
+.closing-payments ul {
+    list-style: none;
+    padding: 0;
+    margin: 0.75rem 0 0 0;
+}
+
+.closing-payments li {
+    color: #e2e8f0;
+    margin-bottom: 0.4rem;
+}
+
+.closing-products table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 0.75rem;
+}
+
+.closing-products th,
+.closing-products td {
+    text-align: left;
+    padding: 0.55rem 0.75rem;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.closing-products tr:last-child td {
+    border-bottom: none;
 }
 
 .placeholder {

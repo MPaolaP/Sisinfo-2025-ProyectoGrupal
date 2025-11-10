@@ -1,4 +1,14 @@
-from flask import Flask, render_template, redirect, url_for, request, jsonify, abort, current_app
+from flask import (
+    Flask,
+    render_template,
+    redirect,
+    url_for,
+    request,
+    jsonify,
+    abort,
+    current_app,
+    send_file,
+)
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -8,6 +18,9 @@ from sqlalchemy import func, or_, case
 from sqlalchemy.orm import aliased
 from decimal import Decimal, InvalidOperation
 from sqlalchemy.exc import IntegrityError
+import csv
+import io
+import json
 
 db = SQLAlchemy()
 login_manager = LoginManager()
@@ -165,6 +178,7 @@ class InvoiceItem(db.Model):
     product_id = db.Column('product_id', db.Integer, db.ForeignKey('products.product_id'), nullable=False)
     quantity = db.Column('quantity', db.Integer, nullable=False)
     unit_price = db.Column('unit_price', db.Numeric(10, 2), nullable=False)
+    discount = db.Column('discount', db.Numeric(10, 2), default=0)
     line_total = db.Column('line_total', db.Numeric(10, 2), nullable=False)
 
     invoice = db.relationship('Invoice', backref='items')
@@ -179,10 +193,137 @@ class Sale(db.Model):
     total_amount = db.Column('total_amount', db.Numeric(10, 2))
     sale_date = db.Column('sale_date', db.DateTime, default=datetime.utcnow)
     session_id = db.Column('session_id', db.Integer, db.ForeignKey('pos_sessions.session_id'))
+    invoice_id = db.Column('invoice_id', db.Integer, db.ForeignKey('invoices.invoice_id'))
 
     store = db.relationship('Store', backref='sales')
     product = db.relationship('Product', backref='sales')
     session = db.relationship('POSSession', backref='sales')
+
+
+class InvoiceAuditLog(db.Model):
+    __tablename__ = 'invoice_audit_logs'
+    id = db.Column('log_id', db.Integer, primary_key=True)
+    invoice_id = db.Column('invoice_id', db.Integer, db.ForeignKey('invoices.invoice_id'), nullable=False)
+    user_id = db.Column('user_id', db.Integer, db.ForeignKey('user_account.user_id'), nullable=False)
+    action = db.Column('action', db.String(50), nullable=False)
+    description = db.Column('description', db.String(255))
+    metadatas = db.Column('metadata', db.JSON)
+    created_at = db.Column('created_at', db.DateTime, default=datetime.utcnow)
+
+    invoice = db.relationship('Invoice', backref='audit_logs')
+    user = db.relationship('User')
+
+
+PDF_PAGE_WIDTH = 612
+PDF_PAGE_HEIGHT = 792
+PDF_MARGIN = 72
+
+
+def _pdf_escape(text):
+    if text is None:
+        return ''
+    return str(text).replace('\\', '\\\\').replace('(', '\\(').replace(')', '\\)')
+
+
+def _build_pdf_page_streams(title, lines):
+    if lines is None:
+        lines = []
+    start_y = PDF_PAGE_HEIGHT - PDF_MARGIN
+    y = start_y
+    commands = []
+    pages = []
+
+    if title:
+        commands.extend([
+            'BT',
+            '/F1 18 Tf',
+            f'72 {y:.2f} Td',
+            f'({_pdf_escape(title)}) Tj',
+            'ET'
+        ])
+        y -= 30
+
+    for line in lines:
+        if y < PDF_MARGIN:
+            pages.append('\n'.join(commands))
+            commands = []
+            y = start_y
+        commands.extend([
+            'BT',
+            '/F1 12 Tf',
+            f'72 {y:.2f} Td',
+            f'({_pdf_escape(line)}) Tj',
+            'ET'
+        ])
+        y -= 16
+
+    if not commands:
+        commands = ['BT', '/F1 12 Tf', f'72 {start_y:.2f} Td', '( ) Tj', 'ET']
+
+    pages.append('\n'.join(commands))
+    return pages
+
+
+def build_simple_pdf(title, lines):
+    page_streams = _build_pdf_page_streams(title, lines)
+    if not page_streams:
+        page_streams = ['']
+
+    total_pages = len(page_streams)
+    font_obj_num = 3
+    first_content_obj = 4
+
+    buffer = io.BytesIO()
+    buffer.write(b'%PDF-1.4\n%\xe2\xe3\xcf\xd3\n')
+
+    offsets = []
+
+    def write_obj(obj_num, body_bytes):
+        offsets.append(buffer.tell())
+        buffer.write(f'{obj_num} 0 obj\n'.encode('ascii'))
+        buffer.write(body_bytes)
+        buffer.write(b'\nendobj\n')
+
+    catalog_body = b'<< /Type /Catalog /Pages 2 0 R >>'
+    write_obj(1, catalog_body)
+
+    page_numbers = [first_content_obj + (index * 2) + 1 for index in range(total_pages)]
+    kids = ' '.join(f'{num} 0 R' for num in page_numbers)
+    pages_body = f'<< /Type /Pages /Kids [{kids}] /Count {total_pages} >>'.encode('ascii')
+    write_obj(2, pages_body)
+
+    font_body = b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'
+    write_obj(font_obj_num, font_body)
+
+    current_obj = first_content_obj
+    for index, stream in enumerate(page_streams):
+        content_bytes = stream.encode('latin-1')
+        content_body = (
+            f'<< /Length {len(content_bytes)} >>\n'.encode('ascii') +
+            b'stream\n' +
+            content_bytes +
+            b'\nendstream'
+        )
+        write_obj(current_obj, content_body)
+
+        page_obj_num = current_obj + 1
+        page_body = (
+            f'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {PDF_PAGE_WIDTH} {PDF_PAGE_HEIGHT}] '
+            f'/Resources << /Font << /F1 {font_obj_num} 0 R >> >> /Contents {current_obj} 0 R >>'
+        ).encode('ascii')
+        write_obj(page_obj_num, page_body)
+        current_obj += 2
+
+    xref_offset = buffer.tell()
+    total_objects = 3 + (total_pages * 2)
+    buffer.write(f'xref\n0 {total_objects + 1}\n'.encode('ascii'))
+    buffer.write(b'0000000000 65535 f \n')
+    for offset in offsets:
+        buffer.write(f'{offset:010d} 00000 n \n'.encode('ascii'))
+    buffer.write(f'trailer\n<< /Size {total_objects + 1} /Root 1 0 R >>\n'.encode('ascii'))
+    buffer.write(f'startxref\n{xref_offset}\n%%EOF'.encode('ascii'))
+    buffer.seek(0)
+    return buffer
 
 class StockAlert(db.Model):
     __tablename__ = 'stock_alerts'
@@ -311,6 +452,7 @@ def page_not_found(error):
 def create_app(config_class=DevelopmentConfig):
     app = Flask(__name__)
     app.config.from_object(config_class)
+    app.config.setdefault('SALES_TAX_RATE', '0.19')
 
     db.init_app(app)
     login_manager.init_app(app)
@@ -324,6 +466,10 @@ def create_app(config_class=DevelopmentConfig):
 
     def ensure_management_access():
         if current_user.user_type not in [1, 2]:
+            abort(403)
+
+    def ensure_invoice_edit_permission():
+        if current_user.user_type != 1:
             abort(403)
 
     def get_accessible_store_ids(user=None):
@@ -348,6 +494,130 @@ def create_app(config_class=DevelopmentConfig):
             return
         if store_id not in store_ids:
             abort(403)
+
+    def get_sales_tax_rate():
+        value = app.config.get('SALES_TAX_RATE', '0')
+        try:
+            return Decimal(str(value))
+        except (InvalidOperation, TypeError):
+            return Decimal('0')
+
+    def record_invoice_audit(invoice, action, description, metadatas=None):
+        metadata_payload = metadatas if metadatas is None else json.loads(json.dumps(metadatas))
+        log_entry = InvoiceAuditLog(
+            invoice_id=invoice.id,
+            user_id=current_user.id,
+            action=action,
+            description=description[:255] if description else None,
+            metadatas=metadata_payload
+        )
+        db.session.add(log_entry)
+
+    def serialize_audit_log(entry):
+        return {
+            'id': entry.id,
+            'action': entry.action,
+            'description': entry.description,
+            'metadatas': entry.metadatas,
+            'user': entry.user.username if entry.user else None,
+            'created_at': entry.created_at.strftime('%Y-%m-%d %H:%M') if entry.created_at else None
+        }
+
+    def compute_closing_report(target_date, store_id=None):
+        if store_id:
+            ensure_store_permission(store_id)
+        start = datetime.combine(target_date, datetime.min.time())
+        end = datetime.combine(target_date, datetime.max.time())
+
+        common_filters = [
+            Invoice.created_at >= start,
+            Invoice.created_at <= end,
+            Invoice.status != 'void'
+        ]
+
+        def base_invoice_query():
+            query = Invoice.query.filter(*common_filters)
+            query = apply_store_filter(query, Invoice.store_id)
+            if store_id:
+                query = query.filter(Invoice.store_id == store_id)
+            return query
+
+        total_result = base_invoice_query().with_entities(
+            func.count(Invoice.id),
+            func.coalesce(func.sum(Invoice.total_amount), 0)
+        ).one()
+
+        transaction_count = int(total_result[0] or 0)
+        total_sales = Decimal(total_result[1] or 0)
+
+        payment_rows = base_invoice_query().with_entities(
+            Invoice.payment_method,
+            func.coalesce(func.sum(Invoice.total_amount), 0),
+            func.count(Invoice.id)
+        ).group_by(Invoice.payment_method).all()
+
+        payment_breakdown = [
+            {
+                'method': row[0] or 'Sin especificar',
+                'total': float(row[1] or 0),
+                'transactions': int(row[2] or 0)
+            }
+            for row in payment_rows
+        ]
+
+        products_query = db.session.query(
+            Product.id,
+            Product.name,
+            func.coalesce(func.sum(InvoiceItem.quantity), 0),
+            func.coalesce(func.sum(InvoiceItem.line_total), 0)
+        ).join(InvoiceItem, Product.id == InvoiceItem.product_id) \
+         .join(Invoice, Invoice.id == InvoiceItem.invoice_id) \
+         .filter(*common_filters)
+
+        products_query = apply_store_filter(products_query, Invoice.store_id)
+        if store_id:
+            products_query = products_query.filter(Invoice.store_id == store_id)
+
+        products_rows = products_query.group_by(Product.id, Product.name).order_by(Product.name.asc()).all()
+
+        products_sold = [
+            {
+                'product_id': row[0],
+                'product_name': row[1],
+                'quantity': int(row[2] or 0),
+                'total_amount': float(row[3] or 0)
+            }
+            for row in products_rows
+        ]
+
+        discount_total_query = db.session.query(
+            func.coalesce(func.sum(InvoiceItem.discount * InvoiceItem.quantity), 0)
+        ).join(Invoice, Invoice.id == InvoiceItem.invoice_id).filter(*common_filters)
+        discount_total_query = apply_store_filter(discount_total_query, Invoice.store_id)
+        if store_id:
+            discount_total_query = discount_total_query.filter(Invoice.store_id == store_id)
+        discount_total = Decimal(discount_total_query.scalar() or 0)
+
+        tax_rate = get_sales_tax_rate()
+        taxes_collected = (total_sales * tax_rate) if total_sales else Decimal('0')
+
+        store_name = None
+        if store_id:
+            store = Store.query.get(store_id)
+            store_name = store.name if store else None
+
+        return {
+            'date': target_date.strftime('%Y-%m-%d'),
+            'store_id': store_id,
+            'store_name': store_name,
+            'total_sales': float(total_sales),
+            'transactions': transaction_count,
+            'payment_breakdown': payment_breakdown,
+            'products_sold': products_sold,
+            'tax_rate': float(tax_rate),
+            'taxes_collected': float(taxes_collected),
+            'discounts_applied': float(discount_total)
+        }
 
     # ======= RUTAS =======
     @app.route('/')
@@ -413,7 +683,8 @@ def create_app(config_class=DevelopmentConfig):
         return render_template('sales.html',
                                username=current_user.username,
                                user_type=current_user.user_type,
-                               stores=stores)
+                               stores=stores,
+                               date=date.today().strftime('%Y-%m-%d'))
     @app.route('/reports')
     @login_required
     def reports():
@@ -1544,23 +1815,43 @@ def create_app(config_class=DevelopmentConfig):
 
         return data
 
-    def serialize_invoice(invoice):
-        return {
+    def serialize_invoice(invoice, detailed=False):
+        items = []
+        for item in invoice.items:
+            entry = {
+                'invoice_item_id': item.id,
+                'product': item.product.name if item.product else 'Producto',
+                'product_id': item.product_id,
+                'product_sku': item.product.sku if item.product else None,
+                'quantity': item.quantity,
+                'unit_price': float(item.unit_price or 0),
+                'discount': float(item.discount or 0),
+                'line_total': float(item.line_total or 0)
+            }
+            items.append(entry)
+
+        data = {
             'id': invoice.id,
             'invoice_number': invoice.invoice_number,
             'customer': invoice.customer.name if invoice.customer else 'Consumidor final',
+            'customer_id': invoice.customer_id,
             'total_amount': float(invoice.total_amount or 0),
             'payment_method': invoice.payment_method,
             'created_at': invoice.created_at.strftime('%Y-%m-%d %H:%M') if invoice.created_at else None,
-            'items': [
-                {
-                    'product': item.product.name if item.product else 'Producto',
-                    'quantity': item.quantity,
-                    'unit_price': float(item.unit_price or 0),
-                    'line_total': float(item.line_total or 0)
-                } for item in invoice.items
-            ]
+            'status': invoice.status,
+            'items': items
         }
+
+        if detailed:
+            data.update({
+                'store_id': invoice.store_id,
+                'store': invoice.store.name if invoice.store else None,
+                'session_id': invoice.session_id,
+                'user_id': invoice.user_id,
+                'user': invoice.user.username if invoice.user else None
+            })
+
+        return data
 
     @app.route('/api/customers', methods=['GET', 'POST'])
     @login_required
@@ -1812,14 +2103,31 @@ def create_app(config_class=DevelopmentConfig):
         db.session.flush()
 
         total_amount = Decimal('0')
+        processed_items = []
         for item in items:
             product = Product.query.get(item.get('product_id'))
             if not product:
                 db.session.rollback()
                 return jsonify({'error': 'Producto no encontrado.'}), 404
             quantity = int(item.get('quantity', 0))
-            unit_price = Decimal(str(item.get('unit_price'))) if item.get('unit_price') is not None else Decimal(str(product.price or 0))
-            line_total = unit_price * quantity
+            try:
+                unit_price = Decimal(str(item.get('unit_price'))) if item.get('unit_price') is not None else Decimal(str(product.price or 0))
+            except (InvalidOperation, TypeError):
+                db.session.rollback()
+                return jsonify({'error': 'El precio unitario proporcionado no es válido.'}), 400
+            try:
+                discount = Decimal(str(item.get('discount', '0') or '0'))
+            except (InvalidOperation, TypeError):
+                db.session.rollback()
+                return jsonify({'error': 'El descuento proporcionado no es válido.'}), 400
+            if discount < 0:
+                db.session.rollback()
+                return jsonify({'error': 'El descuento no puede ser negativo.'}), 400
+            if discount > unit_price:
+                db.session.rollback()
+                return jsonify({'error': 'El descuento no puede ser mayor que el precio unitario.'}), 400
+            effective_price = unit_price - discount
+            line_total = effective_price * quantity
             total_amount += line_total
 
             invoice_item = InvoiceItem(
@@ -1827,6 +2135,7 @@ def create_app(config_class=DevelopmentConfig):
                 product_id=product.id,
                 quantity=quantity,
                 unit_price=unit_price,
+                discount=discount,
                 line_total=line_total
             )
             db.session.add(invoice_item)
@@ -1839,12 +2148,32 @@ def create_app(config_class=DevelopmentConfig):
                 quantity=quantity,
                 total_amount=line_total,
                 sale_date=datetime.utcnow(),
-                session_id=current_session.id
+                session_id=current_session.id,
+                invoice_id=invoice.id
             )
             db.session.add(sale)
+            processed_items.append({
+                'product_id': product.id,
+                'name': product.name,
+                'quantity': quantity,
+                'unit_price': float(unit_price),
+                'discount': float(discount),
+                'line_total': float(line_total)
+            })
 
         invoice.total_amount = total_amount
         invoice.invoice_number = f"INV-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{invoice.id}"
+
+        record_invoice_audit(
+            invoice,
+            'create',
+            'Factura generada desde el punto de venta.',
+            {
+                'items': processed_items,
+                'total_amount': float(total_amount),
+                'payment_method': payment_method
+            }
+        )
 
         db.session.commit()
 
@@ -1859,8 +2188,368 @@ def create_app(config_class=DevelopmentConfig):
         ensure_management_access()
         invoices_query = Invoice.query
         invoices_query = apply_store_filter(invoices_query, Invoice.store_id)
+        today = date.today()
+        start = datetime.combine(today, datetime.min.time())
+        end = datetime.combine(today, datetime.max.time())
+        invoices_query = invoices_query.filter(
+            Invoice.created_at >= start,
+            Invoice.created_at <= end,
+            Invoice.status != 'void'
+        )
         invoices = invoices_query.order_by(Invoice.created_at.desc()).limit(20).all()
         return jsonify({'invoices': [serialize_invoice(invoice) for invoice in invoices]})
+
+    @app.route('/api/invoices/<int:invoice_id>', methods=['GET', 'PUT'])
+    @login_required
+    def manage_invoice(invoice_id):
+        ensure_management_access()
+        invoice = Invoice.query.get_or_404(invoice_id)
+        ensure_store_permission(invoice.store_id)
+
+        if request.method == 'GET':
+            return jsonify({'invoice': serialize_invoice(invoice, detailed=True)})
+
+        ensure_invoice_edit_permission()
+        data = request.get_json(force=True)
+        items_payload = data.get('items') or []
+        if not isinstance(items_payload, list) or not items_payload:
+            return jsonify({'error': 'Debe proporcionar los productos de la factura.'}), 400
+
+        try:
+            payment_method = (data.get('payment_method') or invoice.payment_method or 'Efectivo').strip()
+        except AttributeError:
+            payment_method = invoice.payment_method or 'Efectivo'
+
+        new_items = []
+        new_counts = {}
+        product_cache = {}
+
+        for entry in items_payload:
+            product_id = entry.get('product_id')
+            quantity = entry.get('quantity')
+            if not product_id:
+                return jsonify({'error': 'Cada item debe incluir un producto válido.'}), 400
+            try:
+                product_id = int(product_id)
+            except (TypeError, ValueError):
+                return jsonify({'error': 'El identificador del producto no es válido.'}), 400
+            try:
+                quantity = int(quantity)
+            except (TypeError, ValueError):
+                return jsonify({'error': 'Las cantidades deben ser números enteros.'}), 400
+            if quantity <= 0:
+                return jsonify({'error': 'Las cantidades deben ser mayores que cero.'}), 400
+
+            product = product_cache.get(product_id)
+            if not product:
+                product = Product.query.get(product_id)
+                if not product:
+                    return jsonify({'error': f'Producto {product_id} no encontrado.'}), 404
+                product_cache[product_id] = product
+
+            try:
+                unit_price = Decimal(str(entry.get('unit_price') if entry.get('unit_price') is not None else product.price or 0))
+            except (InvalidOperation, TypeError):
+                return jsonify({'error': 'Alguno de los precios es inválido.'}), 400
+            try:
+                discount = Decimal(str(entry.get('discount', '0') or '0'))
+            except (InvalidOperation, TypeError):
+                return jsonify({'error': 'Alguno de los descuentos es inválido.'}), 400
+            if discount < 0:
+                return jsonify({'error': 'Los descuentos no pueden ser negativos.'}), 400
+            if discount > unit_price:
+                return jsonify({'error': 'El descuento no puede superar el precio unitario.'}), 400
+
+            effective_price = unit_price - discount
+            line_total = effective_price * quantity
+
+            new_items.append({
+                'product_id': product_id,
+                'product_name': product.name,
+                'quantity': quantity,
+                'unit_price': unit_price,
+                'discount': discount,
+                'line_total': line_total
+            })
+            new_counts[product_id] = new_counts.get(product_id, 0) + quantity
+
+        old_items = list(invoice.items)
+        old_counts = {}
+        for item in old_items:
+            old_counts[item.product_id] = old_counts.get(item.product_id, 0) + item.quantity
+
+        all_product_ids = set(old_counts) | set(new_counts)
+
+        inventory_records = {}
+        if all_product_ids:
+            inventories = Inventory.query.filter(
+                Inventory.store_id == invoice.store_id,
+                Inventory.product_id.in_(all_product_ids)
+            ).with_for_update().all()
+            inventory_records = {inventory.product_id: inventory for inventory in inventories}
+
+        for product_id in all_product_ids:
+            inventory = inventory_records.get(product_id)
+            if not inventory:
+                inventory = Inventory(product_id=product_id, store_id=invoice.store_id, quantity=0)
+                db.session.add(inventory)
+                inventory_records[product_id] = inventory
+            available = int(inventory.quantity or 0) + old_counts.get(product_id, 0)
+            required = new_counts.get(product_id, 0)
+            if available < required:
+                return jsonify({'error': f'Stock insuficiente para el producto {product_id}.'}), 400
+
+        try:
+            new_total = Decimal('0')
+
+            Sale.query.filter_by(invoice_id=invoice.id).delete(synchronize_session=False)
+
+            for item in old_items:
+                db.session.delete(item)
+
+            for product_id, inventory in inventory_records.items():
+                available = int(inventory.quantity or 0) + old_counts.get(product_id, 0)
+                required = new_counts.get(product_id, 0)
+                inventory.quantity = available - required
+
+            for entry in new_items:
+                invoice_item = InvoiceItem(
+                    invoice_id=invoice.id,
+                    product_id=entry['product_id'],
+                    quantity=entry['quantity'],
+                    unit_price=entry['unit_price'],
+                    discount=entry['discount'],
+                    line_total=entry['line_total']
+                )
+                db.session.add(invoice_item)
+
+                sale = Sale(
+                    store_id=invoice.store_id,
+                    product_id=entry['product_id'],
+                    quantity=entry['quantity'],
+                    total_amount=entry['line_total'],
+                    sale_date=datetime.utcnow(),
+                    session_id=invoice.session_id,
+                    invoice_id=invoice.id
+                )
+                db.session.add(sale)
+
+                new_total += entry['line_total']
+
+            invoice.total_amount = new_total
+            invoice.payment_method = payment_method
+
+            record_invoice_audit(
+                invoice,
+                'update',
+                'Factura modificada por administrador.',
+                {
+                    'items': [
+                        {
+                            'product_id': entry['product_id'],
+                            'product_name': entry['product_name'],
+                            'quantity': entry['quantity'],
+                            'unit_price': float(entry['unit_price']),
+                            'discount': float(entry['discount']),
+                            'line_total': float(entry['line_total'])
+                        }
+                        for entry in new_items
+                    ],
+                    'total_amount': float(new_total),
+                    'payment_method': payment_method
+                }
+            )
+
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            return jsonify({'error': 'No se pudo actualizar la factura. Revisa los datos ingresados.'}), 500
+
+        return jsonify({'message': 'Factura actualizada correctamente.', 'invoice': serialize_invoice(invoice, detailed=True)})
+
+    @app.route('/api/invoices/<int:invoice_id>/void', methods=['POST'])
+    @login_required
+    def void_invoice(invoice_id):
+        ensure_invoice_edit_permission()
+        invoice = Invoice.query.get_or_404(invoice_id)
+        ensure_store_permission(invoice.store_id)
+
+        if invoice.status == 'void':
+            return jsonify({'error': 'La factura ya está anulada.'}), 400
+
+        for item in invoice.items:
+            inventory = Inventory.query.filter_by(product_id=item.product_id, store_id=invoice.store_id).with_for_update().first()
+            if not inventory:
+                inventory = Inventory(product_id=item.product_id, store_id=invoice.store_id, quantity=0)
+                db.session.add(inventory)
+            inventory.quantity = int(inventory.quantity or 0) + item.quantity
+
+        Sale.query.filter_by(invoice_id=invoice.id).delete(synchronize_session=False)
+
+        invoice.status = 'void'
+
+        record_invoice_audit(invoice, 'void', 'Factura anulada por administrador.')
+
+        db.session.commit()
+        return jsonify({'message': 'Factura anulada correctamente.', 'invoice': serialize_invoice(invoice, detailed=True)})
+
+    @app.route('/api/invoices/<int:invoice_id>/logs', methods=['GET'])
+    @login_required
+    def invoice_logs(invoice_id):
+        ensure_invoice_edit_permission()
+        invoice = Invoice.query.get_or_404(invoice_id)
+        ensure_store_permission(invoice.store_id)
+        logs = InvoiceAuditLog.query.filter_by(invoice_id=invoice.id).order_by(InvoiceAuditLog.created_at.desc()).all()
+        return jsonify({'logs': [serialize_audit_log(entry) for entry in logs]})
+
+    @app.route('/invoices/<int:invoice_id>/pdf', methods=['GET'])
+    @login_required
+    def download_invoice_pdf(invoice_id):
+        ensure_management_access()
+        invoice = Invoice.query.get_or_404(invoice_id)
+        ensure_store_permission(invoice.store_id)
+
+        lines = [
+            f'Fecha: {invoice.created_at.strftime("%Y-%m-%d %H:%M") if invoice.created_at else "N/A"}',
+            f'Sucursal: {invoice.store.name if invoice.store else "General"}',
+            f'Cliente: {invoice.customer.name if invoice.customer else "Consumidor final"}',
+            f'Vendedor: {invoice.user.username if invoice.user else "N/A"}',
+            f'Método de pago: {invoice.payment_method or "N/A"}',
+            f'Estado: {invoice.status}'
+        ]
+
+        total_discount = Decimal('0')
+        lines.append('')
+        lines.append('Detalle de productos:')
+        for item in invoice.items:
+            discount = Decimal(item.discount or 0)
+            total_discount += discount * item.quantity
+            lines.append(f'- {item.quantity} x {item.product.name if item.product else "Producto"}')
+            item_line = f'  Precio: ${Decimal(item.unit_price or 0):.2f}'
+            if discount:
+                item_line += f' | Descuento: ${discount:.2f} | Neto: ${(Decimal(item.unit_price or 0) - discount):.2f}'
+            lines.append(item_line)
+            lines.append(f'  Total línea: ${Decimal(item.line_total or 0):.2f}')
+
+        lines.append('')
+        lines.append(f'Descuentos aplicados: ${total_discount:.2f}')
+        lines.append(f'Total factura: ${Decimal(invoice.total_amount or 0):.2f}')
+
+        pdf_buffer = build_simple_pdf(f'Factura {invoice.invoice_number}', lines)
+        filename = f'Factura_{invoice.invoice_number}.pdf'
+        return send_file(pdf_buffer, as_attachment=True, download_name=filename, mimetype='application/pdf')
+
+    @app.route('/api/pos/closing-report', methods=['GET'])
+    @login_required
+    def closing_report():
+        ensure_management_access()
+        date_param = request.args.get('date')
+        store_param = request.args.get('store_id')
+
+        try:
+            target_date = datetime.strptime(date_param, '%Y-%m-%d').date() if date_param else date.today()
+        except ValueError:
+            return jsonify({'error': 'La fecha proporcionada no es válida.'}), 400
+
+        store_id = None
+        if store_param:
+            try:
+                store_id = int(store_param)
+            except (TypeError, ValueError):
+                return jsonify({'error': 'La sucursal seleccionada no es válida.'}), 400
+
+        report = compute_closing_report(target_date, store_id)
+        return jsonify({'report': report})
+
+    @app.route('/api/pos/closing-report/pdf', methods=['GET'])
+    @login_required
+    def closing_report_pdf():
+        ensure_management_access()
+        date_param = request.args.get('date')
+        store_param = request.args.get('store_id')
+
+        try:
+            target_date = datetime.strptime(date_param, '%Y-%m-%d').date() if date_param else date.today()
+        except ValueError:
+            abort(400)
+
+        store_id = None
+        if store_param:
+            try:
+                store_id = int(store_param)
+            except (TypeError, ValueError):
+                abort(400)
+
+        report = compute_closing_report(target_date, store_id)
+
+        lines = [
+            f'Fecha: {report["date"]}',
+            f'Sucursal: {report["store_name"] or "Todas"}',
+            f'Total ventas: ${report["total_sales"]:.2f}',
+            f'Transacciones: {report["transactions"]}',
+            f'Impuestos ({report["tax_rate"] * 100:.2f}%): ${report["taxes_collected"]:.2f}',
+            f'Descuentos aplicados: ${report["discounts_applied"]:.2f}',
+            ''
+        ]
+
+        lines.append('Desglose por método de pago:')
+        for payment in report['payment_breakdown']:
+            lines.append(f'- {payment["method"]}: ${payment["total"]:.2f} ({payment["transactions"]} transacciones)')
+
+        lines.append('')
+        lines.append('Productos vendidos:')
+        if not report['products_sold']:
+            lines.append('No hay registros de productos vendidos en este periodo.')
+        else:
+            for product in report['products_sold']:
+                lines.append(f'- {product["product_name"]}: {product["quantity"]} unidades por ${product["total_amount"]:.2f}')
+
+        pdf_buffer = build_simple_pdf(f'Cierre de caja {report["date"]}', lines)
+        filename = f'cierre_{report["date"]}.pdf'
+        return send_file(pdf_buffer, as_attachment=True, download_name=filename, mimetype='application/pdf')
+
+    @app.route('/api/pos/closing-report/export', methods=['GET'])
+    @login_required
+    def closing_report_export():
+        ensure_management_access()
+        date_param = request.args.get('date')
+        store_param = request.args.get('store_id')
+
+        try:
+            target_date = datetime.strptime(date_param, '%Y-%m-%d').date() if date_param else date.today()
+        except ValueError:
+            abort(400)
+
+        store_id = None
+        if store_param:
+            try:
+                store_id = int(store_param)
+            except (TypeError, ValueError):
+                abort(400)
+
+        report = compute_closing_report(target_date, store_id)
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(['Fecha', report['date']])
+        writer.writerow(['Sucursal', report['store_name'] or 'Todas'])
+        writer.writerow(['Total ventas', f"${report['total_sales']:.2f}"])
+        writer.writerow(['Transacciones', report['transactions']])
+        writer.writerow(['Impuestos', f"${report['taxes_collected']:.2f}"])
+        writer.writerow(['Tasa de impuestos', f"{report['tax_rate'] * 100:.2f}%"])
+        writer.writerow(['Descuentos aplicados', f"${report['discounts_applied']:.2f}"])
+        writer.writerow([])
+        writer.writerow(['Método de pago', 'Total', 'Transacciones'])
+        for payment in report['payment_breakdown']:
+            writer.writerow([payment['method'], f"${payment['total']:.2f}", payment['transactions']])
+        writer.writerow([])
+        writer.writerow(['Producto', 'Unidades', 'Total'])
+        for product in report['products_sold']:
+            writer.writerow([product['product_name'], product['quantity'], f"${product['total_amount']:.2f}"])
+
+        csv_bytes = io.BytesIO(output.getvalue().encode('utf-8'))
+        filename = f'cierre_{report["date"]}.csv'
+        return send_file(csv_bytes, as_attachment=True, download_name=filename, mimetype='text/csv')
 
     return app
 
