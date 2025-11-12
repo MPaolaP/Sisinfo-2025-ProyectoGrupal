@@ -1,6 +1,5 @@
 from urllib.parse import quote_plus
 import os
-from azure.identity import DefaultAzureCredential
 
 class conexion:
     SECRET_KEY = 'ya_casi_es_navidad'
