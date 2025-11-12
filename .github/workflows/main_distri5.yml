@@ -2,7 +2,7 @@
 # More GitHub Actions for Azure: https://github.com/Azure/actions
 # More info on Python, GitHub Actions, and Azure App Service: https://aka.ms/python-webapps-actions
 
-name: Build and deploy Python app to Azure Web App - Distrito5
+name: Build and deploy Python app to Azure Web App - distri5
 
 on:
   push:
@@ -63,14 +63,14 @@ jobs:
       - name: Login to Azure
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_BF378F3DDD3B492A9A7BB3A2C8349F7F }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_8B6F0A29EDD247F0B050AA0FAC9EA643 }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_9D26D3C3917446C79BB5652B764BFEB4 }}
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_89A45D232EC94EE1ABAABF92B2540279 }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_2B6DB3A7841343C6A95E985CCB9877F8 }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_07126ADAB54F4AD6BE07E867E1B7EC5F }}
 
       - name: 'Deploy to Azure Web App'
         uses: azure/webapps-deploy@v3
         id: deploy-to-webapp
         with:
-          app-name: 'Distrito5'
+          app-name: 'distri5'
           slot-name: 'Production'
           
